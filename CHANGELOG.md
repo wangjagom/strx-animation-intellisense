@@ -1,5 +1,9 @@
 # Change Log
 
+## 0.2.1
+
+- Link the react-native-strx documentation site, npm package, and GitHub repository from the README and extension manifest.
+
 ## 0.2.0
 
 Supports `react-native-strx` 1.0.

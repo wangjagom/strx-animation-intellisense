@@ -1,6 +1,8 @@
 # STRX Animation IntelliSense
 
-Autocomplete, hover docs, and diagnostics for [`react-native-strx`](https://github.com/wangjagom/react-native-strx) `animate` tokens in VS Code.
+Autocomplete, hover docs, and diagnostics for [`react-native-strx`](https://wangjagom.github.io/react-native-strx/) `animate` tokens in VS Code.
+
+[Documentation](https://wangjagom.github.io/react-native-strx/) · [npm](https://www.npmjs.com/package/react-native-strx) · [GitHub](https://github.com/wangjagom/react-native-strx)
 
 ## Features
 

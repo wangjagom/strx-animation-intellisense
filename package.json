@@ -2,7 +2,7 @@
   "name": "strx-animation-intellisense",
   "displayName": "Strx Animation Intellisense",
   "description": "Autocomplete, hover docs, and diagnostics for react-native-strx animate tokens",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "strx",
   "engines": {
     "vscode": "^1.120.0"
@@ -68,6 +68,10 @@
     "eslint": "^9.39.3",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1"
+  },
+  "homepage": "https://wangjagom.github.io/react-native-strx/docs/editor.html",
+  "bugs": {
+    "url": "https://github.com/wangjagom/strx-animation-intellisense/issues"
   },
   "repository": {
     "type": "git",
