@@ -1,369 +1,505 @@
+import * as path from "path";
 import * as vscode from "vscode";
 
-const PRESET_TOKENS = [
-  "fade-in",
-  "fade-out",
-  "slide-up",
-  "slide-down",
-  "slide-left",
-  "slide-right",
-  "scale-in",
-  "scale-out",
-  "scale-up",
-  "scale-down",
-  "bounce",
-] as const;
+import { computeCompletions, type CompletionData } from "./completion";
+import { findDefinedPresets } from "./customPresets";
+import {
+  findAnimateSegments,
+  segmentAt,
+  type AnimateSegment,
+  type SourceLanguage,
+} from "./documentScanner";
+import {
+  analyze,
+  analyzePresetName,
+  type GrammarContext,
+  type TokenIssue,
+} from "./grammar";
+import { computeHover } from "./hover";
+import { loadMetadata, type LoadedMetadata } from "./metadata";
 
-const LAYOUT_TOKENS = [
-  "layout-linear",
-  "layout-spring",
-  "layout-fade",
-  "layout-spring-stiff",
-  "layout-spring-bouncy",
-] as const;
+const LANGUAGES: SourceLanguage[] = [
+  "typescriptreact",
+  "javascriptreact",
+  "typescript",
+  "javascript",
+];
+const SELECTOR: vscode.DocumentSelector = LANGUAGES.map((language) => ({
+  language,
+}));
+const SOURCE_GLOB = "**/*.{js,jsx,ts,tsx}";
+const EXCLUDE_GLOB = "**/{node_modules,lib,dist,build,out}/**";
+const MAX_SCANNED_FILES = 5000;
+const DIAGNOSTIC_DELAY_MS = 250;
 
-const TRANSITION_TOKENS = [
-  "transition",
-  "transition-all",
-  "transition-colors",
-  "transition-opacity",
-  "transition-transform",
-  "transition-spacing",
-  "transition-layout",
-] as const;
+/** Matches an animate string still being typed when the file does not parse. */
+const FALLBACK_PATTERN =
+  /\banimate\s*(?:=\s*\{?|:)\s*[^"'`]*?(["'`])([^"'`]*)$/;
 
-const COMMON_TIMING_TOKENS = [
-  "duration-75",
-  "duration-100",
-  "duration-150",
-  "duration-200",
-  "duration-250",
-  "duration-300",
-  "duration-500",
-  "duration-700",
-  "duration-1000",
-
-  "delay-75",
-  "delay-100",
-  "delay-150",
-  "delay-200",
-  "delay-300",
-  "delay-500",
-
-  "repeat-1",
-  "repeat-2",
-  "repeat-3",
-  "repeat-infinite",
-
-  "linear",
-  "ease",
-  "ease-in",
-  "ease-out",
-  "ease-in-out",
-] as const;
-
-const MODIFIER_TOKENS = ["from:", "to:", "exit:"] as const;
-
-const OPACITY_TOKENS = [
-  "opacity-0",
-  "opacity-5",
-  "opacity-10",
-  "opacity-15",
-  "opacity-20",
-  "opacity-25",
-  "opacity-30",
-  "opacity-35",
-  "opacity-40",
-  "opacity-45",
-  "opacity-50",
-  "opacity-55",
-  "opacity-60",
-  "opacity-65",
-  "opacity-70",
-  "opacity-75",
-  "opacity-80",
-  "opacity-85",
-  "opacity-90",
-  "opacity-95",
-  "opacity-100",
-] as const;
-
-type TokenSuggestion = {
-  label: string;
-  insertText?: string | vscode.SnippetString;
-  detail?: string;
-  documentation?: string;
-  kind?: vscode.CompletionItemKind;
+const CATEGORY_ORDER: Record<CompletionData["category"], number> = {
+  preset: 0,
+  keyframePrefix: 1,
+  utility: 1,
+  layout: 2,
+  transition: 3,
+  easing: 4,
+  timing: 5,
+  legacy: 9,
 };
 
-const BASE_SUGGESTIONS: TokenSuggestion[] = [
-  ...PRESET_TOKENS.map((label) => ({
-    label,
-    detail: "STRX animation preset",
-  })),
-  ...LAYOUT_TOKENS.map((label) => ({
-    label,
-    detail: "STRX layout animation token",
-  })),
-  ...TRANSITION_TOKENS.map((label) => ({
-    label,
-    detail: "STRX transition token",
-  })),
-  ...COMMON_TIMING_TOKENS.map((label) => ({
-    label,
-    detail: "STRX timing token",
-  })),
-  ...MODIFIER_TOKENS.map((label) => ({
-    label,
-    detail: "STRX keyframe modifier",
-  })),
+const CATEGORY_KIND: Record<
+  CompletionData["category"],
+  vscode.CompletionItemKind
+> = {
+  preset: vscode.CompletionItemKind.Constant,
+  keyframePrefix: vscode.CompletionItemKind.Keyword,
+  utility: vscode.CompletionItemKind.Property,
+  layout: vscode.CompletionItemKind.EnumMember,
+  transition: vscode.CompletionItemKind.EnumMember,
+  easing: vscode.CompletionItemKind.Value,
+  timing: vscode.CompletionItemKind.Value,
+  legacy: vscode.CompletionItemKind.Value,
+};
 
-  {
-    label: "duration-${number}",
-    insertText: new vscode.SnippetString("duration-${1:300}"),
-    detail: "STRX custom duration token",
-    documentation: "`duration-${number}`",
-  },
-  {
-    label: "delay-${number}",
-    insertText: new vscode.SnippetString("delay-${1:100}"),
-    detail: "STRX custom delay token",
-    documentation: "`delay-${number}`",
-  },
-  {
-    label: "repeat-${number}",
-    insertText: new vscode.SnippetString("repeat-${1:1}"),
-    detail: "STRX custom repeat token",
-    documentation: "`repeat-${number}`",
-  },
-];
+interface LocatedIssue {
+  range: vscode.Range;
+  issue: TokenIssue;
+}
 
-const UTILITY_SUGGESTIONS: TokenSuggestion[] = [
-  ...OPACITY_TOKENS.map((label) => ({
-    label,
-    detail: "STRX opacity utility token",
-  })),
-
-  {
-    label: "opacity-${number}",
-    insertText: new vscode.SnippetString("opacity-${1:50}"),
-    detail: "STRX custom opacity utility",
-  },
-
-  {
-    label: "translate-x-${number}",
-    insertText: new vscode.SnippetString("translate-x-${1:16}"),
-    detail: "STRX translateX utility",
-  },
-  {
-    label: "-translate-x-${number}",
-    insertText: new vscode.SnippetString("-translate-x-${1:16}"),
-    detail: "STRX negative translateX utility",
-  },
-  {
-    label: "translate-y-${number}",
-    insertText: new vscode.SnippetString("translate-y-${1:16}"),
-    detail: "STRX translateY utility",
-  },
-  {
-    label: "-translate-y-${number}",
-    insertText: new vscode.SnippetString("-translate-y-${1:16}"),
-    detail: "STRX negative translateY utility",
-  },
-
-  {
-    label: "scale-${number}",
-    insertText: new vscode.SnippetString("scale-${1:100}"),
-    detail: "STRX scale utility",
-  },
-  {
-    label: "scale-x-${number}",
-    insertText: new vscode.SnippetString("scale-x-${1:100}"),
-    detail: "STRX scaleX utility",
-  },
-  {
-    label: "scale-y-${number}",
-    insertText: new vscode.SnippetString("scale-y-${1:100}"),
-    detail: "STRX scaleY utility",
-  },
-
-  {
-    label: "rotate-${number}",
-    insertText: new vscode.SnippetString("rotate-${1:45}"),
-    detail: "STRX rotate utility",
-  },
-  {
-    label: "-rotate-${number}",
-    insertText: new vscode.SnippetString("-rotate-${1:45}"),
-    detail: "STRX negative rotate utility",
-  },
-
-  {
-    label: "w-${number}",
-    insertText: new vscode.SnippetString("w-${1:100}"),
-    detail: "STRX width utility",
-  },
-  {
-    label: "h-${number}",
-    insertText: new vscode.SnippetString("h-${1:100}"),
-    detail: "STRX height utility",
-  },
-];
-
-const MODIFIER_PREFIXES = ["from:", "to:", "exit:"] as const;
-
-type ModifierPrefix = (typeof MODIFIER_PREFIXES)[number];
-
-type AnimateContext = {
+interface LocatedValue {
   value: string;
-  lastToken: string;
-  replaceRange: vscode.Range;
-  modifierPrefix?: ModifierPrefix;
-};
-
-function getAnimateContext(
-  document: vscode.TextDocument,
-  position: vscode.Position,
-): AnimateContext | undefined {
-  const line = document.lineAt(position.line).text;
-  const linePrefix = line.slice(0, position.character);
-
-  const match = /\banimate\s*=\s*(?:\{\s*)?(["'`])([^"'`]*)$/.exec(linePrefix);
-
-  if (!match) {
-    return undefined;
-  }
-
-  const quote = match[1];
-  const value = match[2] ?? "";
-
-  const quoteIndex = linePrefix.lastIndexOf(quote);
-
-  if (quoteIndex < 0) {
-    return undefined;
-  }
-
-  const valueStartCharacter = quoteIndex + 1;
-
-  const lastTokenMatch = /(?:^|\s)(\S*)$/.exec(value);
-  const lastToken = lastTokenMatch?.[1] ?? "";
-
-  const tokenStartInValue = value.length - lastToken.length;
-
-  const tokenStartPosition = new vscode.Position(
-    position.line,
-    valueStartCharacter + tokenStartInValue,
-  );
-
-  const replaceRange = new vscode.Range(tokenStartPosition, position);
-
-  const modifierPrefix = MODIFIER_PREFIXES.find((prefix) =>
-    lastToken.startsWith(prefix),
-  );
-
-  return {
-    value,
-    lastToken,
-    replaceRange,
-    modifierPrefix,
-  };
+  /** Document offset of the value's first character. */
+  start: number;
+  /** Cursor offset within the value. */
+  offset: number;
+  kind: AnimateSegment["kind"];
 }
 
-function withModifierPrefix(
-  suggestion: TokenSuggestion,
-  prefix: ModifierPrefix,
-): TokenSuggestion {
-  const insertText =
-    suggestion.insertText instanceof vscode.SnippetString
-      ? new vscode.SnippetString(`${prefix}${suggestion.insertText.value}`)
-      : `${prefix}${suggestion.insertText ?? suggestion.label}`;
+class StrxLanguageService {
+  private readonly metadataByFolder = new Map<string, LoadedMetadata>();
+  private readonly customPresetsByFile = new Map<string, string[]>();
+  private readonly segmentCache = new Map<
+    string,
+    { version: number; segments: AnimateSegment[] | undefined }
+  >();
 
-  return {
-    ...suggestion,
-    label: `${prefix}${suggestion.label}`,
-    insertText,
-    detail: suggestion.detail
-      ? `${suggestion.detail} with ${prefix}`
-      : `STRX utility token with ${prefix}`,
-  };
-}
+  context(document: vscode.TextDocument): GrammarContext {
+    const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+    const key = folder?.uri.toString() ?? "";
+    let loaded = this.metadataByFolder.get(key);
 
-function getSuggestions(context: AnimateContext): TokenSuggestion[] {
-  if (context.modifierPrefix) {
-    return UTILITY_SUGGESTIONS.map((suggestion) =>
-      withModifierPrefix(suggestion, context.modifierPrefix!),
+    if (!loaded) {
+      loaded = loadMetadata(folder?.uri.fsPath);
+      this.metadataByFolder.set(key, loaded);
+    }
+
+    return {
+      metadata: loaded.metadata,
+      customPresets: new Set([...this.customPresetsByFile.values()].flat()),
+    };
+  }
+
+  resetMetadata(): void {
+    this.metadataByFolder.clear();
+  }
+
+  segments(document: vscode.TextDocument): AnimateSegment[] | undefined {
+    const key = document.uri.toString();
+    const cached = this.segmentCache.get(key);
+
+    if (cached && cached.version === document.version) {
+      return cached.segments;
+    }
+
+    const segments = findAnimateSegments(
+      document.getText(),
+      document.languageId as SourceLanguage,
     );
+    this.segmentCache.set(key, { version: document.version, segments });
+
+    return segments;
   }
 
-  return BASE_SUGGESTIONS;
+  forget(document: vscode.TextDocument): void {
+    this.segmentCache.delete(document.uri.toString());
+  }
+
+  updateCustomPresets(uri: vscode.Uri, text: string | undefined): void {
+    const names = text === undefined ? [] : findDefinedPresets(text);
+
+    if (names.length > 0) {
+      this.customPresetsByFile.set(uri.toString(), names);
+    } else {
+      this.customPresetsByFile.delete(uri.toString());
+    }
+  }
+
+  /** Locates the animate string at `position`, if any. */
+  valueAt(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+  ): LocatedValue | undefined {
+    const offset = document.offsetAt(position);
+    const segment = segmentAt(this.segments(document) ?? [], offset);
+
+    if (segment) {
+      return {
+        value: segment.value,
+        start: segment.start,
+        offset: offset - segment.start,
+        kind: segment.kind,
+      };
+    }
+
+    // The file may not parse while a string is being typed.
+    const linePrefix = document
+      .lineAt(position.line)
+      .text.slice(0, position.character);
+    const match = FALLBACK_PATTERN.exec(linePrefix);
+
+    if (!match) {
+      return undefined;
+    }
+
+    const value = match[2];
+
+    return {
+      value,
+      start: offset - value.length,
+      offset: value.length,
+      kind: "tokens",
+    };
+  }
+
+  issues(document: vscode.TextDocument): LocatedIssue[] {
+    const segments = this.segments(document);
+
+    if (!segments) {
+      return [];
+    }
+
+    const context = this.context(document);
+    const issues: LocatedIssue[] = [];
+    const range = (start: number, end: number) =>
+      new vscode.Range(document.positionAt(start), document.positionAt(end));
+
+    for (const segment of segments) {
+      if (segment.kind === "presetName") {
+        const issue = analyzePresetName(segment.value, context);
+
+        if (issue) {
+          issues.push({ range: range(segment.start, segment.end), issue });
+        }
+
+        continue;
+      }
+
+      for (const token of analyze(segment.value, context)) {
+        // Tokens next to a `${}` expression may continue outside this string.
+        const touchesExpression =
+          (segment.openStart && token.start === 0) ||
+          (segment.openEnd && token.end === segment.value.length);
+
+        if (token.issue && !touchesExpression) {
+          issues.push({
+            range: range(
+              segment.start + token.start,
+              segment.start + token.end,
+            ),
+            issue: token.issue,
+          });
+        }
+      }
+    }
+
+    return issues;
+  }
 }
 
-function createCompletionItem(
-  suggestion: TokenSuggestion,
+function toCompletionItem(
+  data: CompletionData,
   index: number,
   range: vscode.Range,
 ): vscode.CompletionItem {
   const item = new vscode.CompletionItem(
-    suggestion.label,
-    suggestion.kind ?? vscode.CompletionItemKind.Keyword,
+    data.label,
+    CATEGORY_KIND[data.category],
   );
 
   item.range = range;
-  item.insertText = suggestion.insertText ?? suggestion.label;
-  item.detail = suggestion.detail ?? "STRX Animation";
-  item.documentation = new vscode.MarkdownString(
-    suggestion.documentation ?? `\`${suggestion.label}\` animation token`,
-  );
+  item.insertText = data.snippet
+    ? new vscode.SnippetString(data.insertText)
+    : data.insertText;
+  item.filterText = data.insertText.replace(/\$\{1:([^}]*)\}/, "$1");
+  item.detail = data.detail;
+  item.documentation = new vscode.MarkdownString(data.documentation);
+  item.sortText = `${CATEGORY_ORDER[data.category]}_${index
+    .toString()
+    .padStart(4, "0")}`;
 
-  item.sortText = `0000_${index.toString().padStart(4, "0")}`;
-  item.filterText = suggestion.label;
+  if (data.deprecated) {
+    item.tags = [vscode.CompletionItemTag.Deprecated];
+  }
 
-  if (suggestion.label.endsWith(":")) {
+  if (data.retrigger) {
     item.command = {
       command: "editor.action.triggerSuggest",
-      title: "Trigger STRX utility suggestions",
+      title: "Suggest STRX utilities",
     };
   }
 
   return item;
 }
 
-export function activate(extensionContext: vscode.ExtensionContext) {
-  const selector: vscode.DocumentSelector = [
-    { language: "javascriptreact", scheme: "file" },
-    { language: "typescriptreact", scheme: "file" },
-    { language: "javascript", scheme: "file" },
-    { language: "typescript", scheme: "file" },
-  ];
+function quickFixes(
+  document: vscode.TextDocument,
+  range: vscode.Range,
+  issue: TokenIssue,
+): vscode.CodeAction[] {
+  const actions: vscode.CodeAction[] = [];
 
-  const provider = vscode.languages.registerCompletionItemProvider(
-    selector,
-    {
-      provideCompletionItems(document, position) {
-        const animateContext = getAnimateContext(document, position);
+  if (issue.suggestion) {
+    const action = new vscode.CodeAction(
+      `Replace with "${issue.suggestion}"`,
+      vscode.CodeActionKind.QuickFix,
+    );
+    action.edit = new vscode.WorkspaceEdit();
+    action.edit.replace(document.uri, range, issue.suggestion);
+    action.isPreferred = true;
+    actions.push(action);
+  }
 
-        if (!animateContext) {
+  if (issue.needsComma) {
+    const action = new vscode.CodeAction(
+      "Start a new group with a comma",
+      vscode.CodeActionKind.QuickFix,
+    );
+    const tokenStart = document.offsetAt(range.start);
+    const whitespace =
+      /\s*$/.exec(document.getText().slice(0, tokenStart))?.[0].length ?? 0;
+
+    action.edit = new vscode.WorkspaceEdit();
+    action.edit.replace(
+      document.uri,
+      new vscode.Range(document.positionAt(tokenStart - whitespace), range.start),
+      ", ",
+    );
+    action.isPreferred = !issue.suggestion;
+    actions.push(action);
+  }
+
+  return actions;
+}
+
+function diagnosticsEnabled(): boolean {
+  return vscode.workspace
+    .getConfiguration("strxAnimation")
+    .get<boolean>("diagnostics.enable", true);
+}
+
+export function activate(extensionContext: vscode.ExtensionContext): void {
+  const service = new StrxLanguageService();
+  const diagnostics = vscode.languages.createDiagnosticCollection("strx");
+  const pending = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const isSource = (document: vscode.TextDocument) =>
+    (LANGUAGES as string[]).includes(document.languageId);
+
+  const refresh = (document: vscode.TextDocument) => {
+    if (!isSource(document)) {
+      return;
+    }
+
+    if (!diagnosticsEnabled()) {
+      diagnostics.delete(document.uri);
+      return;
+    }
+
+    diagnostics.set(
+      document.uri,
+      service.issues(document).map(({ range, issue }) => {
+        const diagnostic = new vscode.Diagnostic(
+          range,
+          issue.suggestion
+            ? `${issue.message} Did you mean "${issue.suggestion}"?`
+            : issue.message,
+          vscode.DiagnosticSeverity.Warning,
+        );
+
+        diagnostic.source = "strx";
+        return diagnostic;
+      }),
+    );
+  };
+
+  const scheduleRefresh = (document: vscode.TextDocument) => {
+    const key = document.uri.toString();
+    clearTimeout(pending.get(key));
+    pending.set(
+      key,
+      setTimeout(() => {
+        pending.delete(key);
+        refresh(document);
+      }, DIAGNOSTIC_DELAY_MS),
+    );
+  };
+
+  const refreshAll = () => vscode.workspace.textDocuments.forEach(refresh);
+
+  const rescanFile = async (uri: vscode.Uri) => {
+    if (uri.fsPath.split(path.sep).includes("node_modules")) {
+      return;
+    }
+
+    try {
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      service.updateCustomPresets(uri, Buffer.from(bytes).toString("utf8"));
+    } catch {
+      service.updateCustomPresets(uri, undefined);
+    }
+  };
+
+  const scanWorkspacePresets = async () => {
+    const files = await vscode.workspace.findFiles(
+      SOURCE_GLOB,
+      EXCLUDE_GLOB,
+      MAX_SCANNED_FILES,
+    );
+
+    await Promise.all(files.map(rescanFile));
+    refreshAll();
+  };
+
+  const reloadMetadata = () => {
+    service.resetMetadata();
+    refreshAll();
+  };
+
+  const sourceWatcher = vscode.workspace.createFileSystemWatcher(SOURCE_GLOB);
+  const packageWatcher = vscode.workspace.createFileSystemWatcher(
+    "**/node_modules/react-native-strx/package.json",
+  );
+
+  extensionContext.subscriptions.push(
+    diagnostics,
+    sourceWatcher,
+    packageWatcher,
+    sourceWatcher.onDidChange(rescanFile),
+    sourceWatcher.onDidCreate(rescanFile),
+    sourceWatcher.onDidDelete((uri) =>
+      service.updateCustomPresets(uri, undefined),
+    ),
+    packageWatcher.onDidChange(reloadMetadata),
+    packageWatcher.onDidCreate(reloadMetadata),
+    packageWatcher.onDidDelete(reloadMetadata),
+    vscode.commands.registerCommand(
+      "strxAnimation.reloadTokens",
+      reloadMetadata,
+    ),
+
+    vscode.languages.registerCompletionItemProvider(
+      SELECTOR,
+      {
+        provideCompletionItems(document, position) {
+          const located = service.valueAt(document, position);
+
+          if (!located || located.kind !== "tokens") {
+            return undefined;
+          }
+
+          const result = computeCompletions(
+            located.value,
+            located.offset,
+            service.context(document),
+          );
+          const range = new vscode.Range(
+            document.positionAt(located.start + result.replaceStart),
+            document.positionAt(located.start + result.replaceEnd),
+          );
+
+          return new vscode.CompletionList(
+            result.items.map((item, index) =>
+              toCompletionItem(item, index, range),
+            ),
+            false,
+          );
+        },
+      },
+      '"',
+      "'",
+      "`",
+      " ",
+      ",",
+      ":",
+    ),
+
+    vscode.languages.registerHoverProvider(SELECTOR, {
+      provideHover(document, position) {
+        const located = service.valueAt(document, position);
+
+        if (!located || located.kind !== "tokens") {
           return undefined;
         }
 
-        const suggestions = getSuggestions(animateContext);
-
-        const items = suggestions.map((suggestion, index) =>
-          createCompletionItem(suggestion, index, animateContext.replaceRange),
+        const hover = computeHover(
+          located.value,
+          located.offset,
+          service.context(document),
         );
 
-        return new vscode.CompletionList(items, false);
+        return hover
+          ? new vscode.Hover(
+              new vscode.MarkdownString(hover.markdown),
+              new vscode.Range(
+                document.positionAt(located.start + hover.start),
+                document.positionAt(located.start + hover.end),
+              ),
+            )
+          : undefined;
       },
+    }),
+
+    vscode.languages.registerCodeActionsProvider(
+      SELECTOR,
+      {
+        provideCodeActions(document, range) {
+          return service
+            .issues(document)
+            .filter((located) => located.range.intersection(range))
+            .flatMap((located) =>
+              quickFixes(document, located.range, located.issue),
+            );
+        },
+      },
+      { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
+    ),
+
+    vscode.workspace.onDidOpenTextDocument(refresh),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (isSource(event.document)) {
+        service.updateCustomPresets(
+          event.document.uri,
+          event.document.getText(),
+        );
+        scheduleRefresh(event.document);
+      }
+    }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      service.forget(document);
+      diagnostics.delete(document.uri);
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("strxAnimation")) {
+        refreshAll();
+      }
+    }),
+    {
+      dispose: () => pending.forEach((timer) => clearTimeout(timer)),
     },
-    '"',
-    "'",
-    "`",
-    " ",
-    ":",
-    "-",
   );
 
-  extensionContext.subscriptions.push(provider);
+  refreshAll();
+  void scanWorkspacePresets();
 }
 
-export function deactivate() {}
+export function deactivate(): void {}
