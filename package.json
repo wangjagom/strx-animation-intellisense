@@ -1,14 +1,24 @@
 {
   "name": "strx-animation-intellisense",
   "displayName": "Strx Animation Intellisense",
-  "description": "IntelliSense for react-native-strx animation tokens",
-  "version": "0.0.1",
+  "description": "Autocomplete, hover docs, and diagnostics for react-native-strx animate tokens",
+  "version": "0.2.0",
   "publisher": "strx",
   "engines": {
     "vscode": "^1.120.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Linters",
+    "Snippets"
+  ],
+  "keywords": [
+    "react-native",
+    "reanimated",
+    "animation",
+    "strx",
+    "tailwind",
+    "intellisense"
   ],
   "main": "./out/extension.js",
   "activationEvents": [
@@ -18,22 +28,21 @@
     "onLanguage:typescriptreact"
   ],
   "contributes": {
-    "completionProviders": [
+    "configuration": {
+      "title": "STRX Animation",
+      "properties": {
+        "strxAnimation.diagnostics.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show warnings for unknown or invalid tokens in animate strings."
+        }
+      }
+    },
+    "commands": [
       {
-        "language": "typescriptreact",
-        "triggerCharacters": [
-          " ",
-          "\"",
-          "'"
-        ]
-      },
-      {
-        "language": "javascriptreact",
-        "triggerCharacters": [
-          " ",
-          "\"",
-          "'"
-        ]
+        "command": "strxAnimation.reloadTokens",
+        "title": "Reload Token Metadata",
+        "category": "STRX Animation"
       }
     ]
   },
@@ -41,11 +50,15 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test:unit": "npm run compile && node --test out/test/unit/*.test.js",
+    "pretest": "npm run compile && npm run lint",
+    "test": "vscode-test",
+    "sync:tokens": "node scripts/sync-tokens.mjs",
+    "package": "vsce package"
   },
   "devDependencies": {
+    "@babel/types": "^7.29.8",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "@types/vscode": "^1.120.0",
@@ -60,5 +73,8 @@
     "type": "git",
     "url": "https://github.com/wangjagom/strx-animation-intellisense.git"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@babel/parser": "^7.29.9"
+  }
 }
