@@ -11,13 +11,13 @@ async function openTsx(content: string): Promise<vscode.TextDocument> {
 }
 
 async function waitFor<T>(
-  read: () => T | undefined,
+  read: () => T | undefined | Promise<T | undefined>,
   timeoutMs = 5000,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const value = read();
+    const value = await read();
 
     if (value !== undefined) {
       return value;
@@ -30,18 +30,30 @@ async function waitFor<T>(
 }
 
 suite("STRX Animation IntelliSense", () => {
+  suiteSetup(async () => {
+    // Opening a document only schedules activation; activate explicitly so
+    // providers are registered before the first request.
+    await vscode.extensions
+      .getExtension("strx.strx-animation-intellisense")
+      ?.activate();
+  });
+
   test("suggests v1 tokens inside animate strings", async () => {
     const source = `<Strx.View animate="fade-in " />`;
     const document = await openTsx(source);
     const position = document.positionAt(source.indexOf('in "') + 3);
-    const list = await vscode.commands.executeCommand<vscode.CompletionList>(
-      "vscode.executeCompletionItemProvider",
-      document.uri,
-      position,
-    );
-    const labels = list.items.map((item) =>
-      typeof item.label === "string" ? item.label : item.label.label,
-    );
+    const labels = await waitFor(async () => {
+      const list =
+        await vscode.commands.executeCommand<vscode.CompletionList>(
+          "vscode.executeCompletionItemProvider",
+          document.uri,
+          position,
+        );
+      const found = list.items.map((item) =>
+        typeof item.label === "string" ? item.label : item.label.label,
+      );
+      return found.includes("layout-spring") ? found : undefined;
+    });
 
     assert.ok(labels.includes("spring"));
     assert.ok(labels.includes("layout-spring"));
