@@ -1,5 +1,14 @@
 # Change Log
 
+## 0.3.3
+
+- Timing charts connect to the rest of the comma group:
+  - `delay-*` shows the wait, then the group's real motion length and where it comes from (`duration-1000`, a preset's default, or a spring's settle time);
+  - `duration-*` starts after the group's delay and is compared with the preset's own default (for example `slide-up` 320ms) instead of 300ms;
+  - easing curves are drawn over the group's delay and duration, and spring curves start after its delay;
+  - `play-*` repeats the group's duration after its delay and shows the total.
+- In a spring group, `duration-*` and easing tokens are marked as ignored, and an existing `duration-*` is noted as having no effect.
+
 ## 0.3.2
 
 - Previews follow the rest of the comma group:
