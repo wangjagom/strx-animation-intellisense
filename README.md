@@ -49,3 +49,15 @@ xvfb-run -a npm test                    # integration tests in VS Code (Linux CI
 npm run sync:tokens -- ../react-native-strx/tokens.json   # refresh the bundled snapshot
 npm run package                         # build a .vsix
 ```
+
+## Releasing
+
+Pushing a version tag runs `.github/workflows/release.yml`: it checks the tag matches `package.json`, runs the tests, publishes to the Visual Studio Marketplace (and to Open VSX when an `OVSX_PAT` secret exists), and creates a GitHub release with the `.vsix` attached.
+
+```sh
+# after bumping "version" in package.json and CHANGELOG.md on main
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+Repository secrets: `VSCE_PAT` (Azure DevOps token with the Marketplace **Manage** scope for the `strx` publisher) and, optionally, `OVSX_PAT` (an [open-vsx.org](https://open-vsx.org) access token).
