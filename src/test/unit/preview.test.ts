@@ -2,7 +2,15 @@ import * as assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { computeHover } from "../../hover";
-import { previewMarkdown, previewSvg, sampleFor } from "../../preview";
+import {
+  previewMarkdown,
+  previewSvg,
+  sampleFor,
+  timelineSvg,
+  timingSvg,
+  tokenPreviewSvg,
+  valuePreviewSvg,
+} from "../../preview";
 import { makeContext } from "./fixtures";
 
 const context = makeContext(["pop-in"]);
@@ -27,22 +35,12 @@ describe("sampleFor", () => {
       sampleFor("exit:-translate-x-{number}", metadata),
       "exit:-translate-x-20",
     );
-    assert.equal(
-      sampleFor("ease-in", metadata),
-      "from:-translate-x-60 ease-in",
-    );
-    assert.equal(
-      sampleFor("duration-{number}", metadata),
-      "from:-translate-x-60 duration-300",
-    );
-    assert.equal(
-      sampleFor("damping-20", metadata),
-      "from:-translate-x-60 damping-20 spring",
-    );
-    assert.equal(
-      sampleFor("play-infinite", metadata),
-      "from:-translate-x-60 play-infinite",
-    );
+  });
+
+  it("leaves timing tokens to the timing charts", () => {
+    for (const token of ["ease-in", "spring", "duration-500", "play-3"]) {
+      assert.equal(sampleFor(token, metadata), undefined, token);
+    }
   });
 
   it("has no sample for custom presets", () => {
@@ -105,6 +103,73 @@ describe("previewSvg", () => {
 
     assert.match(markdown, /^!\[Animation preview\]\(data:image\/svg\+xml;base64,/);
     assert.match(decode(markdown), /^<svg /);
+  });
+});
+
+describe("timingSvg", () => {
+  it("draws easings over the default curve", () => {
+    const svg = timingSvg("ease-in-out", metadata)!;
+
+    assert.match(svg, /slow start and slow end/);
+    assert.match(svg, /ease-out \(default\)/);
+    assert.match(svg, /animateMotion/);
+    assert.match(timingSvg("ease-out", metadata)!, /this is the default/);
+  });
+
+  it("compares durations with the default", () => {
+    assert.match(timingSvg("duration-500", metadata)!, /1\.7× longer than default/);
+    assert.match(timingSvg("duration-150", metadata)!, /2× shorter than default/);
+    assert.match(timingSvg("duration-{number}", metadata)!, /same as default/);
+    assert.equal(timingSvg("duration-0", metadata), undefined);
+  });
+
+  it("splits delays into waiting and moving", () => {
+    assert.match(timingSvg("delay-200", metadata)!, /starts at 200ms · ends at 500ms/);
+  });
+
+  it("charts springs with overshoot and settle time", () => {
+    const base = timingSvg("spring", metadata)!;
+    const bouncy = timingSvg("damping-4", metadata)!;
+
+    assert.match(base, /overshoots \d+%/);
+    assert.match(base, /stops \d+ms/);
+    assert.doesNotMatch(base, /default spring/);
+    assert.match(bouncy, /bouncier/);
+    assert.match(bouncy, /default spring/);
+    assert.match(timingSvg("stiffness-300", metadata)!, /snappier/);
+    assert.match(timingSvg("mass-3", metadata)!, /heavier, slower/);
+  });
+
+  it("repeats bars for play counts", () => {
+    assert.match(timingSvg("play-3", metadata)!, /3 plays × 300ms = 900ms/);
+    assert.match(timingSvg("play-infinite", metadata)!, /repeats until removed/);
+    assert.match(timingSvg("repeat-2", metadata)!, /2 plays/);
+  });
+
+  it("ignores shape tokens", () => {
+    assert.equal(timingSvg("fade-in", metadata), undefined);
+    assert.equal(timingSvg("layout-spring", metadata), undefined);
+  });
+});
+
+describe("token and value previews", () => {
+  it("picks a chart for timing tokens and a card otherwise", () => {
+    assert.match(tokenPreviewSvg("delay-200", metadata)!, /waits, then moves/);
+    assert.match(tokenPreviewSvg("slide-up", metadata)!, /@keyframes c\{/);
+    assert.equal(tokenPreviewSvg("pop-in", metadata), undefined);
+  });
+
+  it("draws a timeline for several timed groups", () => {
+    const svg = timelineSvg(
+      "fade-in duration-200, slide-up delay-150 duration-500 ease-in-out",
+      metadata,
+    )!;
+
+    assert.match(svg, /Whole value timeline/);
+    assert.match(svg, /0–200ms/);
+    assert.match(svg, /150–650ms/);
+    assert.equal(timelineSvg("fade-in duration-200", metadata), undefined);
+    assert.match(valuePreviewSvg("fade-in from:translate-y-12", metadata)!, /@keyframes c\{/);
   });
 });
 

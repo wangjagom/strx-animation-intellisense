@@ -17,7 +17,7 @@ import {
 } from "./grammar";
 import { computeHover } from "./hover";
 import { loadMetadata, type LoadedMetadata } from "./metadata";
-import { previewMarkdown, previewSvg, sampleFor } from "./preview";
+import { previewMarkdown, tokenPreviewSvg } from "./preview";
 
 const LANGUAGES: SourceLanguage[] = [
   "typescriptreact",
@@ -318,10 +318,9 @@ function resolvePreview(item: vscode.CompletionItem): vscode.CompletionItem {
   pendingPreviews.delete(item);
 
   const { data, context } = pending;
-  const sample = sampleFor(data.label, context.metadata);
-  const image = sample
-    ? previewMarkdown(previewSvg(sample, context.metadata))
-    : "";
+  const image = previewMarkdown(
+    tokenPreviewSvg(data.label, context.metadata),
+  );
 
   if (image) {
     item.documentation = new vscode.MarkdownString(

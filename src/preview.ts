@@ -747,12 +747,10 @@ export function previewSvg(
   return undefined;
 }
 
-/** A base motion that makes timing tokens visible. */
-const TIMING_BASE = "from:-translate-x-60";
-
 /**
- * Maps a single token (or a completion label such as `duration-{number}` or
- * `from:`) to an animate string that demonstrates it.
+ * Maps a single token (or a completion label such as `slide-up` or `from:`)
+ * to an animate string that demonstrates its shape. Timing tokens have no
+ * shape of their own; `timingSvg` draws them instead.
  */
 export function sampleFor(
   token: string,
@@ -796,25 +794,534 @@ export function sampleFor(
     return text;
   }
 
-  if (
-    metadata.easings.some((easing) => easing.token === text) ||
-    text === metadata.spring.token
-  ) {
-    return `${TIMING_BASE} ${text}`;
+  return undefined;
+}
+
+// ---------------------------------------------------------- timing charts
+//
+// Timing tokens change when and how fast something moves, which is hard to
+// see on a moving card. They get static charts instead: easing and spring
+// curves, and millisecond timelines, each drawn over the default value.
+
+const CHART_W = 280;
+const CHART_H = 150;
+const PLOT = { l: 34, r: 14, t: 34, b: 26 };
+const LINE = { l: 14, r: 14 };
+const DEFAULT_DURATION = 300;
+const DEFAULT_SPRING = { damping: 10, stiffness: 100, mass: 1 };
+const WAIT = "#f59e0b";
+const SETTLED = "#16a34a";
+
+const EASING_TEXT: Record<string, string> = {
+  linear: "same speed all the way",
+  ease: "gentle start and end",
+  "ease-in": "starts slow, ends fast",
+  "ease-out": "starts fast, ends slow",
+  "ease-in-out": "slow start and slow end",
+};
+
+const escapeText = (text: string) =>
+  text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function text(
+  x: number,
+  y: number,
+  content: string | number,
+  options: { cls?: string; anchor?: "start" | "middle" | "end"; fill?: string } = {},
+): string {
+  return `<text x="${round(x)}" y="${round(y)}"${options.cls ? ` class="${options.cls}"` : ""}${
+    options.anchor && options.anchor !== "start"
+      ? ` text-anchor="${options.anchor}"`
+      : ""
+  }${options.fill ? ` style="fill:${options.fill}"` : ""}>${escapeText(String(content))}</text>`;
+}
+
+/** Title line: the token in bold, then a short summary. */
+function title(token: string, summary: string): string {
+  return (
+    text(12, 18, token, { cls: "k" }) +
+    text(12 + token.length * 6.2 + 8, 18, summary)
+  );
+}
+
+function chart(body: string, defs = ""): string {
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${CHART_W}" height="${CHART_H}" viewBox="0 0 ${CHART_W} ${CHART_H}">`,
+    `<style>`,
+    `text{font:10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;fill:${COLORS.mute}}`,
+    `.k{font-weight:600;fill:${COLORS.card}}.w{fill:${WAIT}}`,
+    `@media (prefers-reduced-motion:reduce){.m{display:none}}`,
+    `</style>`,
+    defs ? `<defs>${defs}</defs>` : "",
+    `<rect width="${CHART_W}" height="${CHART_H}" rx="10" fill="${COLORS.mute}" fill-opacity="0.12"/>`,
+    body,
+    `</svg>`,
+  ].join("");
+}
+
+/** Path through (x, y) points in data space. */
+function curvePath(
+  points: [number, number][],
+  xMax: number,
+  yMin: number,
+  yMax: number,
+): string {
+  const w = CHART_W - PLOT.l - PLOT.r;
+  const h = CHART_H - PLOT.t - PLOT.b;
+
+  return points
+    .map(([x, y], index) => {
+      const px = PLOT.l + (x / xMax) * w;
+      const py = PLOT.t + (1 - (y - yMin) / (yMax - yMin)) * h;
+      return `${index ? "L" : "M"}${round(px)} ${round(py)}`;
+    })
+    .join("");
+}
+
+function curveAxes(yMin: number, yMax: number, xLabel: string): string {
+  const w = CHART_W - PLOT.l - PLOT.r;
+  const h = CHART_H - PLOT.t - PLOT.b;
+  const yAt = (value: number) =>
+    round(PLOT.t + (1 - (value - yMin) / (yMax - yMin)) * h);
+
+  return (
+    `<line x1="${PLOT.l}" x2="${PLOT.l + w}" y1="${yAt(0)}" y2="${yAt(0)}" stroke="${COLORS.mute}" stroke-opacity="0.5"/>` +
+    `<line x1="${PLOT.l}" x2="${PLOT.l + w}" y1="${yAt(1)}" y2="${yAt(1)}" stroke="${COLORS.mute}" stroke-opacity="0.35" stroke-dasharray="2 3"/>` +
+    text(PLOT.l - 6, yAt(1) + 3, "end", { anchor: "end" }) +
+    text(PLOT.l - 6, yAt(0) + 3, "start", { anchor: "end" }) +
+    text(PLOT.l, CHART_H - 9, 0) +
+    text(PLOT.l + w, CHART_H - 9, xLabel, { anchor: "end" })
+  );
+}
+
+const solid = (path: string) =>
+  `<path d="${path}" fill="none" stroke="${COLORS.card}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+const dashed = (path: string) =>
+  `<path d="${path}" fill="none" stroke="${COLORS.mute}" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+
+/** A dot that travels along the curve, then rests at its end. */
+function tracer(path: string, ms: number): string {
+  return `<circle class="m" r="3.5" fill="${COLORS.card}"><animateMotion dur="${round(ms)}ms" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;0.7;1" calcMode="linear" path="${path}"/></circle>`;
+}
+
+function easingChart(token: string): string {
+  const points = (ease: (t: number) => number) =>
+    Array.from({ length: 61 }, (_, i) => [i / 60, ease(i / 60)] as [number, number]);
+  const line = curvePath(points(EASINGS[token]), 1, -0.05, 1.05);
+  const isDefault = token === "ease-out";
+  const legendY = CHART_H - PLOT.b - 6;
+
+  return chart(
+    title(token, EASING_TEXT[token] ?? "") +
+      curveAxes(-0.05, 1.05, "time →") +
+      (isDefault
+        ? text(CHART_W - PLOT.r - 2, legendY, "this is the default", { anchor: "end" })
+        : dashed(curvePath(points(EASINGS["ease-out"]), 1, -0.05, 1.05)) +
+          text(CHART_W - PLOT.r - 2, legendY, "- - ease-out (default)", {
+            anchor: "end",
+          })) +
+      solid(line) +
+      tracer(line, 1800),
+  );
+}
+
+function springStats(spring: typeof DEFAULT_SPRING) {
+  const curve = springCurve(spring.damping, spring.stiffness, spring.mass);
+  const points: [number, number][] = [];
+  let peak = 0;
+
+  for (let t = 0; t <= curve.duration; t += 1) {
+    peak = Math.max(peak, curve.at(t));
+  }
+
+  const step = Math.max(1, Math.round(curve.duration / 90));
+
+  for (let t = 0; t < curve.duration; t += step) {
+    points.push([t, curve.at(t)]);
+  }
+
+  points.push([curve.duration, 1]);
+
+  return { settle: curve.duration, peak, points };
+}
+
+function springChart(
+  token: string,
+  summary: string,
+  spring: typeof DEFAULT_SPRING,
+): string {
+  const stats = springStats(spring);
+  const base = springStats(DEFAULT_SPRING);
+  const isDefault =
+    spring.damping === DEFAULT_SPRING.damping &&
+    spring.stiffness === DEFAULT_SPRING.stiffness &&
+    spring.mass === DEFAULT_SPRING.mass;
+  const xMax = Math.max(stats.settle, isDefault ? 0 : base.settle) * 1.05;
+  const yMax = Math.max(1.12, stats.peak, isDefault ? 0 : base.peak) + 0.06;
+  const line = curvePath(stats.points, xMax, -0.05, yMax);
+  const w = CHART_W - PLOT.l - PLOT.r;
+  const h = CHART_H - PLOT.t - PLOT.b;
+  const settleX = round(PLOT.l + (stats.settle / xMax) * w);
+  const overshoot = Math.round((stats.peak - 1) * 100);
+
+  return chart(
+    title(token, summary) +
+      curveAxes(-0.05, yMax, `${Math.round(xMax)}ms`) +
+      (isDefault
+        ? ""
+        : dashed(curvePath(base.points, xMax, -0.05, yMax)) +
+          text(CHART_W - PLOT.r, PLOT.t + 6 + h * 0.45, "- - default spring", {
+            anchor: "end",
+          })) +
+      solid(line) +
+      `<line x1="${settleX}" x2="${settleX}" y1="${PLOT.t}" y2="${CHART_H - PLOT.b}" stroke="${SETTLED}" stroke-dasharray="2 2"/>` +
+      text(settleX - 4, CHART_H - PLOT.b - 6, `stops ${stats.settle}ms`, {
+        anchor: "end",
+      }) +
+      text(
+        CHART_W - PLOT.r,
+        PLOT.t - 6,
+        overshoot > 0 ? `overshoots ${overshoot}%` : "no overshoot",
+        { anchor: "end" },
+      ) +
+      tracer(line, Math.max(1200, stats.settle * 2)),
+  );
+}
+
+function xOnLine(ms: number, max: number): number {
+  return round(LINE.l + (ms / max) * (CHART_W - LINE.l - LINE.r));
+}
+
+function ruler(max: number, y: number): string {
+  const step = max <= 600 ? 100 : max <= 1200 ? 200 : max <= 3000 ? 500 : 1000;
+  let out = `<line x1="${LINE.l}" x2="${CHART_W - LINE.r}" y1="${y}" y2="${y}" stroke="${COLORS.mute}" stroke-opacity="0.5"/>`;
+
+  for (let t = 0; t <= max; t += step) {
+    const x = xOnLine(t, max);
+    out +=
+      `<line x1="${x}" x2="${x}" y1="${y - 3}" y2="${y + 3}" stroke="${COLORS.mute}"/>` +
+      text(x, y + 14, t, {
+        anchor: t === 0 ? "start" : t + step > max ? "end" : "middle",
+      });
+  }
+
+  return out;
+}
+
+function bar(
+  from: number,
+  to: number,
+  y: number,
+  height: number,
+  options: { fill?: string; opacity?: number; dashed?: boolean } = {},
+): string {
+  const fill = options.fill ?? COLORS.card;
+
+  return `<rect x="${from}" y="${y}" width="${Math.max(2, round(to - from))}" height="${height}" rx="4" fill="${fill}" fill-opacity="${options.opacity ?? 0.95}"${
+    options.dashed ? ` stroke="${fill}" stroke-dasharray="3 2"` : ""
+  }/>`;
+}
+
+const HATCH = `<pattern id="h" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="3" height="6" fill="${WAIT}" fill-opacity="0.6"/></pattern>`;
+
+function waitBar(from: number, to: number, y: number, height: number): string {
+  return `<rect x="${from}" y="${y}" width="${Math.max(2, round(to - from))}" height="${height}" rx="4" fill="url(#h)" stroke="${WAIT}" stroke-opacity="0.8"/>`;
+}
+
+/** A vertical line sweeping across a timeline. */
+function playhead(total: number, max: number, y1: number, y2: number): string {
+  const end = xOnLine(total, max);
+  const values = `${LINE.l};${end};${end}`;
+  const timing = `keyTimes="0;0.75;1" dur="${round(Math.max(1200, total * 1.5))}ms" repeatCount="indefinite"`;
+
+  return (
+    `<line class="m" x1="${LINE.l}" x2="${LINE.l}" y1="${y1}" y2="${y2}" stroke="${COLORS.card}" stroke-width="1.5">` +
+    `<animate attributeName="x1" values="${values}" ${timing}/>` +
+    `<animate attributeName="x2" values="${values}" ${timing}/>` +
+    `</line>`
+  );
+}
+
+const niceMax = (ms: number, step: number, min: number) =>
+  Math.max(min, Math.ceil(ms / step) * step);
+
+function durationChart(token: string, ms: number): string {
+  const max = niceMax(ms, 250, 1000);
+  const ratio = ms / DEFAULT_DURATION;
+  const times = (value: number) => value.toFixed(1).replace(/\.0$/, "");
+  const summary =
+    ms === DEFAULT_DURATION
+      ? "same as default"
+      : ratio > 1
+        ? `${times(ratio)}× longer than default`
+        : `${times(1 / ratio)}× shorter than default`;
+  const end = xOnLine(ms, max);
+  const labelInside = end + 50 > CHART_W - LINE.r;
+
+  return chart(
+    title(token, summary) +
+      text(LINE.l, 44, `default ${DEFAULT_DURATION}ms`) +
+      bar(LINE.l, xOnLine(DEFAULT_DURATION, max), 50, 12, {
+        fill: COLORS.mute,
+        opacity: 0.35,
+        dashed: true,
+      }) +
+      text(LINE.l, 82, "this token", { cls: "k" }) +
+      bar(LINE.l, end, 88, 16) +
+      text(labelInside ? end - 4 : end + 4, 100, `${ms}ms`, {
+        cls: labelInside ? undefined : "k",
+        anchor: labelInside ? "end" : "start",
+        fill: labelInside ? "#fff" : undefined,
+      }) +
+      ruler(max, 122) +
+      playhead(ms, max, 84, 108),
+  );
+}
+
+function delayChart(token: string, ms: number): string {
+  const motion = DEFAULT_DURATION;
+  const max = niceMax(ms + motion, 200, 600);
+  const start = xOnLine(ms, max);
+  const end = xOnLine(ms + motion, max);
+
+  return chart(
+    title(token, "waits, then moves") +
+      waitBar(LINE.l, start, 58, 22) +
+      text((LINE.l + start) / 2, 50, `wait ${ms}ms`, { cls: "w", anchor: "middle" }) +
+      bar(start + 2, end, 58, 22) +
+      text((start + end) / 2, 50, `motion ${motion}ms`, { cls: "k", anchor: "middle" }) +
+      text(LINE.l, 100, `starts at ${ms}ms · ends at ${ms + motion}ms`) +
+      ruler(max, 122) +
+      playhead(ms + motion, max, 54, 84),
+    HATCH,
+  );
+}
+
+function playChart(token: string, plays: number): string {
+  const infinite = plays === Infinity;
+  const count = infinite ? 4 : Math.min(plays, 8);
+  const each = DEFAULT_DURATION;
+  const overflow = infinite || plays > count;
+  // Leave room after the bars for the "∞ …" or "…" marker.
+  const max = niceMax(count * each * (overflow ? 1.15 : 1), 250, 1000);
+  let bars = "";
+
+  for (let i = 0; i < count; i += 1) {
+    const from = xOnLine(i * each, max) + 1;
+    const to = xOnLine((i + 1) * each, max) - 1;
+    bars +=
+      bar(from, to, 60, 22, { opacity: infinite ? 0.95 - i * 0.22 : 0.95 }) +
+      text((from + to) / 2, 75, i + 1, { anchor: "middle", fill: "#fff" });
+  }
+
+  return chart(
+    title(
+      token,
+      infinite
+        ? "repeats until removed"
+        : `${plays} plays × ${each}ms = ${plays * each}ms`,
+    ) +
+      bars +
+      (infinite ? text(xOnLine(count * each, max) + 6, 76, "∞ …", { cls: "k" }) : "") +
+      (plays > count && !infinite
+        ? text(xOnLine(count * each, max) + 6, 76, "…", { cls: "k" })
+        : "") +
+      text(LINE.l, 104, "Reduce Motion: plays once") +
+      ruler(max, 122),
+  );
+}
+
+/**
+ * Draws a timing token as a chart, or returns `undefined` for tokens that
+ * change shape rather than timing.
+ */
+export function timingSvg(
+  token: string,
+  metadata: TokenMetadata,
+): string | undefined {
+  const label = token.replace(/\{number\}$/, "");
+
+  if (EASINGS[label] && metadata.easings.some((easing) => easing.token === label)) {
+    return easingChart(label);
+  }
+
+  if (label === metadata.spring.token) {
+    return springChart(
+      label,
+      `damping ${DEFAULT_SPRING.damping} · stiffness ${DEFAULT_SPRING.stiffness}`,
+      DEFAULT_SPRING,
+    );
   }
 
   const timing = [...metadata.numericTiming, ...metadata.countTiming].find(
-    (candidate) => text.startsWith(candidate.prefix),
+    (candidate) => label.startsWith(candidate.prefix),
   );
 
   if (!timing) {
     return undefined;
   }
 
-  const full = text === timing.prefix ? timing.example : text;
-  const springOnly = ["damping-", "stiffness-", "mass-"].includes(timing.prefix);
+  const full = label === timing.prefix ? timing.example : label;
+  const raw = full.slice(timing.prefix.length);
 
-  return `${TIMING_BASE} ${full}${springOnly ? " spring" : ""}`;
+  if (timing.prefix === "play-" || timing.prefix === "repeat-") {
+    const plays = raw === "infinite" ? Infinity : Number(raw);
+    return plays === Infinity || (Number.isInteger(plays) && plays > 0)
+      ? playChart(full, plays)
+      : undefined;
+  }
+
+  if (!NUMBER.test(raw)) {
+    return undefined;
+  }
+
+  const value = Number(raw);
+
+  switch (timing.prefix) {
+    case "duration-":
+      return value > 0 ? durationChart(full, value) : undefined;
+    case "delay-":
+      return delayChart(full, value);
+    case "damping-":
+      return value > 0
+        ? springChart(
+            full,
+            value < DEFAULT_SPRING.damping
+              ? "bouncier"
+              : value > DEFAULT_SPRING.damping
+                ? "calmer"
+                : "default",
+            { ...DEFAULT_SPRING, damping: value },
+          )
+        : undefined;
+    case "stiffness-":
+      return value > 0
+        ? springChart(
+            full,
+            value > DEFAULT_SPRING.stiffness
+              ? "snappier"
+              : value < DEFAULT_SPRING.stiffness
+                ? "softer"
+                : "default",
+            { ...DEFAULT_SPRING, stiffness: value },
+          )
+        : undefined;
+    case "mass-":
+      return value > 0
+        ? springChart(
+            full,
+            value > DEFAULT_SPRING.mass
+              ? "heavier, slower"
+              : value < DEFAULT_SPRING.mass
+                ? "lighter, faster"
+                : "default",
+            { ...DEFAULT_SPRING, mass: value },
+          )
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * When an animate value has several comma groups, draws one timeline row
+ * per group so overlaps and end times are visible. Returns `undefined` for
+ * fewer than two timed groups.
+ */
+export function timelineSvg(
+  value: string,
+  metadata: TokenMetadata,
+): string | undefined {
+  const labels = value
+    .split(",")
+    .map((group) => group.trim().split(/\s+/).filter(Boolean))
+    .filter((tokens) => tokens.length > 0);
+  const groups = resolve(value, metadata);
+  const rows: { label: string; delay: number; length: number; loop: boolean }[] = [];
+
+  groups.forEach((group, index) => {
+    const moves = Object.keys(group.from).some(
+      (key) =>
+        group.from[key as Channel] !== undefined &&
+        group.to[key as Channel] !== undefined &&
+        group.from[key as Channel] !== group.to[key as Channel],
+    );
+
+    if (!moves) {
+      return;
+    }
+
+    const tokens = labels[index] ?? [];
+    const shape = tokens.filter(
+      (token) => !timingSvg(token, metadata) && !/^(layout|transition)/.test(token),
+    );
+    const plays = group.timing.play === Infinity ? 1 : group.timing.play;
+
+    rows.push({
+      label: (shape.join(" ") || tokens.join(" ")).slice(0, 26),
+      delay: group.timing.delay,
+      length: curveFor(group.timing).duration * plays,
+      loop: group.timing.play === Infinity,
+    });
+  });
+
+  if (rows.length < 2) {
+    return undefined;
+  }
+
+  const shown = rows.slice(0, 3);
+  const end = Math.max(...shown.map((row) => row.delay + row.length));
+  const max = niceMax(end, 200, 400);
+  let body = text(12, 18, "Whole value timeline", { cls: "k" });
+
+  shown.forEach((row, index) => {
+    const y = 34 + index * 30;
+    const start = xOnLine(row.delay, max);
+    const finish = xOnLine(row.delay + row.length, max);
+
+    body += text(LINE.l, y + 4, row.label);
+    body += text(
+      CHART_W - LINE.r,
+      y + 4,
+      `${row.delay}–${Math.round(row.delay + row.length)}ms${row.loop ? " ∞" : ""}`,
+      { anchor: "end" },
+    );
+
+    if (row.delay) {
+      body += waitBar(LINE.l, start, y + 9, 12);
+    }
+
+    body += bar(start + 1, finish, y + 9, 12);
+  });
+
+  return chart(
+    body + ruler(max, 128) + playhead(end, max, 40, 34 + shown.length * 30),
+    HATCH,
+  );
+}
+
+/** The preview for one token: a timing chart, or an animated card. */
+export function tokenPreviewSvg(
+  token: string,
+  metadata: TokenMetadata,
+): string | undefined {
+  const chartSvg = timingSvg(token, metadata);
+
+  if (chartSvg) {
+    return chartSvg;
+  }
+
+  const sample = sampleFor(token, metadata);
+
+  return sample ? previewSvg(sample, metadata) : undefined;
+}
+
+/** The preview for a whole animate value: a timeline, or an animated card. */
+export function valuePreviewSvg(
+  value: string,
+  metadata: TokenMetadata,
+): string | undefined {
+  return timelineSvg(value, metadata) ?? previewSvg(value, metadata);
 }
 
 /** Markdown image for a preview, or an empty string. */

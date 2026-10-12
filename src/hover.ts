@@ -1,5 +1,9 @@
 import { describeFrames } from "./completion";
-import { previewMarkdown, previewSvg, sampleFor } from "./preview";
+import {
+  previewMarkdown,
+  tokenPreviewSvg,
+  valuePreviewSvg,
+} from "./preview";
 import {
   analyze,
   KEYFRAME_PREFIXES,
@@ -54,13 +58,11 @@ function previewSection(
   tokens: ReturnType<typeof analyze>,
   { metadata }: GrammarContext,
 ): string {
-  const sample = sampleFor(text, metadata);
-  let section = sample
-    ? `\n\n${previewMarkdown(previewSvg(sample, metadata))}`
-    : "";
+  const token = previewMarkdown(tokenPreviewSvg(text, metadata));
+  let section = token ? `\n\n${token}` : "";
 
   if (tokens.length > 1 && tokens.every((candidate) => !candidate.issue)) {
-    const whole = previewMarkdown(previewSvg(value, metadata));
+    const whole = previewMarkdown(valuePreviewSvg(value, metadata));
 
     if (whole) {
       section += `\n\n---\n\nWhole value \`${value.trim().replace(/`/g, "")}\`\n\n${whole}`;
