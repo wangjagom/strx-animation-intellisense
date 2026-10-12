@@ -1,11 +1,13 @@
 name: Release
 
-# Push a version tag (for example `git tag v0.3.0 && git push origin v0.3.0`)
-# to test, package, and publish the extension. The tag must match the
-# `version` in package.json.
+# Push a version tag (for example `git tag v0.3.0 && git push origin v0.3.0`),
+# or run this workflow from the Actions tab, to test, package, and publish
+# the extension. A pushed tag must match the `version` in package.json; a
+# manual run tags the current commit with that version.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,13 +22,23 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Check tag matches package.json
+      - name: Resolve release tag
         run: |
           version="$(node -p "require('./package.json').version")"
-          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${version} (expected v${version})."
+          tag="v${version}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            if [ "${GITHUB_REF_NAME}" != "${tag}" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${version} (expected ${tag})."
+              exit 1
+            fi
+          elif [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Run the Release workflow on main (got ${GITHUB_REF})."
+            exit 1
+          elif git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
+            echo "::error::${tag} already exists. Bump the version in package.json before releasing again."
             exit 1
           fi
+          echo "RELEASE_TAG=${tag}" >> "$GITHUB_ENV"
 
       - run: npm ci
       - run: npm run lint
@@ -59,6 +71,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" extension.vsix \
-            --title "${GITHUB_REF_NAME}" \
-            --notes "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md)."
+          gh release create "${RELEASE_TAG}" extension.vsix \
+            --target "${GITHUB_SHA}" \
+            --title "${RELEASE_TAG}" \
+            --notes "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${RELEASE_TAG}/CHANGELOG.md)."
