@@ -1,5 +1,15 @@
 # Change Log
 
+## 0.3.1
+
+- Timing tokens get charts instead of a moving card, so differences are easy to see:
+  - easing tokens show their progress curve over the default `ease-out` curve;
+  - `duration-*` shows a millisecond bar next to the default 300ms;
+  - `delay-*` splits the wait from the motion;
+  - `spring`, `damping-*`, `stiffness-*`, and `mass-*` show the spring curve with its overshoot and settle time, over the default spring;
+  - `play-*` shows one bar per play with the total time.
+- Hovering an `animate` value with several comma groups shows a timeline with one row per group.
+
 ## 0.3.0
 
 - Animated previews in completion details and hovers. Each preview plays the token's motion with the duration, easing, or spring from the installed library's `tokens.json`. Hovering a token in a longer string also previews the whole `animate` value.
