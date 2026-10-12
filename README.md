@@ -8,6 +8,7 @@ Autocomplete, hover docs, and diagnostics for [`react-native-strx`](https://wang
 
 - **Completions** for presets, `from:` / `to:` / `exit:` keyframe utilities, `transition-*`, `layout-*`, easing, `spring`, and timing tokens such as `duration-*`, `delay-*`, `play-*`, `damping-*`, `stiffness-*`, and `mass-*`. Suggestions follow the library's grammar: one preset, layout token, transition token, and easing per comma group.
 - **Hover docs** for every token, including each preset's start and end values and default motion.
+- **Animated previews** in completion details and hovers: a small card plays the token's motion with its real duration, easing, or spring. Hovering a token in a longer string also previews the whole `animate` value. Timing tokens are shown on a sample slide, and `transition-*` / `layout-*` tokens on a style or size change.
 - **Diagnostics** for unknown or invalid tokens, matching the warnings the library logs at runtime, with quick fixes such as `fade-inn` → `fade-in` and inserting a comma between two presets.
 - **Custom presets** registered with `definePreset("name", …)` anywhere in the workspace are suggested and accepted.
 - **Version-matched tokens**: when the project's installed `react-native-strx` ships `tokens.json` (1.0+), the extension reads its token list from there. Otherwise it uses a bundled snapshot.
@@ -33,6 +34,7 @@ Works in `.tsx`, `.jsx`, `.ts`, and `.js` files.
 | Setting                            | Default | Description                                               |
 | ---------------------------------- | ------- | --------------------------------------------------------- |
 | `strxAnimation.diagnostics.enable` | `true`  | Show warnings for unknown or invalid tokens.              |
+| `strxAnimation.preview.enable`     | `true`  | Show animated previews in completion details and hovers. They are also hidden when `workbench.reduceMotion` is `on`, and stay still when the OS asks for reduced motion. |
 
 ## Commands
 

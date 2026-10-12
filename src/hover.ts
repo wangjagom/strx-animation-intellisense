@@ -1,4 +1,5 @@
 import { describeFrames } from "./completion";
+import { previewMarkdown, previewSvg, sampleFor } from "./preview";
 import {
   analyze,
   KEYFRAME_PREFIXES,
@@ -18,8 +19,10 @@ export function computeHover(
   value: string,
   offset: number,
   context: GrammarContext,
+  options: { previews?: boolean } = {},
 ): HoverData | undefined {
-  const token = analyze(value, context).find(
+  const tokens = analyze(value, context);
+  const token = tokens.find(
     (candidate) => offset >= candidate.start && offset <= candidate.end,
   );
 
@@ -27,11 +30,44 @@ export function computeHover(
     return undefined;
   }
 
-  const markdown = describeToken(token.text, context) ?? token.issue?.message;
+  const description = describeToken(token.text, context);
+  let markdown = description ?? token.issue?.message;
 
-  return markdown
-    ? { start: token.start, end: token.end, markdown }
-    : undefined;
+  if (!markdown) {
+    return undefined;
+  }
+
+  if (options.previews && description) {
+    markdown += previewSection(token.text, value, tokens, context);
+  }
+
+  return { start: token.start, end: token.end, markdown };
+}
+
+/**
+ * Animated previews for a hovered token: the token on its own, then the
+ * whole animate value when it combines several valid tokens.
+ */
+function previewSection(
+  text: string,
+  value: string,
+  tokens: ReturnType<typeof analyze>,
+  { metadata }: GrammarContext,
+): string {
+  const sample = sampleFor(text, metadata);
+  let section = sample
+    ? `\n\n${previewMarkdown(previewSvg(sample, metadata))}`
+    : "";
+
+  if (tokens.length > 1 && tokens.every((candidate) => !candidate.issue)) {
+    const whole = previewMarkdown(previewSvg(value, metadata));
+
+    if (whole) {
+      section += `\n\n---\n\nWhole value \`${value.trim().replace(/`/g, "")}\`\n\n${whole}`;
+    }
+  }
+
+  return section.replace(/\n\n$/, "");
 }
 
 export function describeToken(
