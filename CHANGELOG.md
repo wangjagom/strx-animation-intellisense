@@ -1,5 +1,12 @@
 # Change Log
 
+## 0.3.2
+
+- Previews follow the rest of the comma group:
+  - a shape token such as `slide-up` plays with the group's `duration-*`, `delay-*`, easing, and spring tokens, and says which ones it applied;
+  - a timing token's chart is followed by the group's motion with that value, so you can see what changing it does;
+  - spring values in a group without `spring` are flagged as having no effect.
+
 ## 0.3.1
 
 - Timing tokens get charts instead of a moving card, so differences are easy to see:

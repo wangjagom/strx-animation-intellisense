@@ -1,7 +1,7 @@
 import { describeFrames } from "./completion";
 import {
   previewMarkdown,
-  tokenPreviewSvg,
+  tokenPreviewMarkdown,
   valuePreviewSvg,
 } from "./preview";
 import {
@@ -42,7 +42,7 @@ export function computeHover(
   }
 
   if (options.previews && description) {
-    markdown += previewSection(token.text, value, tokens, context);
+    markdown += previewSection(token, value, tokens, context);
   }
 
   return { start: token.start, end: token.end, markdown };
@@ -53,12 +53,20 @@ export function computeHover(
  * whole animate value when it combines several valid tokens.
  */
 function previewSection(
-  text: string,
+  hovered: ReturnType<typeof analyze>[number],
   value: string,
   tokens: ReturnType<typeof analyze>,
   { metadata }: GrammarContext,
 ): string {
-  const token = previewMarkdown(tokenPreviewSvg(text, metadata));
+  const groupTokens = tokens
+    .filter(
+      (candidate) =>
+        candidate.group === hovered.group &&
+        candidate !== hovered &&
+        !candidate.issue,
+    )
+    .map((candidate) => candidate.text);
+  const token = tokenPreviewMarkdown(hovered.text, metadata, groupTokens);
   let section = token ? `\n\n${token}` : "";
 
   if (tokens.length > 1 && tokens.every((candidate) => !candidate.issue)) {
