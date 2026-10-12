@@ -1,6 +1,7 @@
 import * as assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { computeCompletions } from "../../completion";
 import { computeHover } from "../../hover";
 import {
   previewMarkdown,
@@ -8,6 +9,7 @@ import {
   sampleFor,
   timelineSvg,
   timingSvg,
+  tokenPreviewMarkdown,
   tokenPreviewSvg,
   valuePreviewSvg,
 } from "../../preview";
@@ -170,6 +172,76 @@ describe("token and value previews", () => {
     assert.match(svg, /150–650ms/);
     assert.equal(timelineSvg("fade-in duration-200", metadata), undefined);
     assert.match(valuePreviewSvg("fade-in from:translate-y-12", metadata)!, /@keyframes c\{/);
+  });
+});
+
+describe("group-aware previews", () => {
+  const images = (markdown: string) =>
+    markdown.match(/!\[Animation preview\]/g)?.length ?? 0;
+  const svgs = (markdown: string) =>
+    [...markdown.matchAll(/base64,([A-Za-z0-9+/=]+)\)/g)].map((match) =>
+      Buffer.from(match[1], "base64").toString("utf8"),
+    );
+
+  it("plays a shape token with the group's timing", () => {
+    const markdown = tokenPreviewMarkdown("slide-up", metadata, [
+      "duration-800",
+      "delay-200",
+    ]);
+
+    assert.match(markdown, /With this group's timing: `duration-800 delay-200`/);
+    assert.match(svgs(markdown)[0], /800ms ease-out · delay 200ms/);
+  });
+
+  it("ignores other shape tokens and keeps the default without timing", () => {
+    const markdown = tokenPreviewMarkdown("slide-up", metadata, ["from:opacity-0"]);
+
+    assert.doesNotMatch(markdown, /this group/);
+    assert.match(svgs(markdown)[0], /320ms ease-out/);
+  });
+
+  it("adds the group's shape under a timing chart, replacing the same slot", () => {
+    const markdown = tokenPreviewMarkdown("duration-500", metadata, [
+      "slide-up",
+      "duration-300",
+      "ease-in-out",
+    ]);
+    const [chart, card] = svgs(markdown);
+
+    assert.equal(images(markdown), 2);
+    assert.match(chart, /1\.7× longer than default/);
+    assert.match(markdown, /In this group: `slide-up ease-in-out duration-500`/);
+    assert.match(card, /500ms ease-in-out/);
+  });
+
+  it("swaps easings and notes spring values without a spring", () => {
+    const easing = tokenPreviewMarkdown("linear", metadata, ["fade-in", "ease-in"]);
+    const springless = tokenPreviewMarkdown("damping-4", metadata, ["fade-in"]);
+    const spring = tokenPreviewMarkdown("damping-4", metadata, ["bounce"]);
+
+    assert.match(easing, /In this group: `fade-in linear`/);
+    assert.match(springless, /add `spring` for this to take effect/);
+    assert.doesNotMatch(spring, /add `spring`/);
+  });
+
+  it("shows only the chart when the group has no shape", () => {
+    const markdown = tokenPreviewMarkdown("delay-200", metadata, ["ease-in"]);
+
+    assert.equal(images(markdown), 1);
+  });
+
+  it("passes the group to completion items", () => {
+    const items = computeCompletions("slide-up duration-800 ", 22, context).items;
+
+    assert.deepEqual(items[0].groupTokens, ["slide-up", "duration-800"]);
+  });
+
+  it("uses the group in hovers", () => {
+    const hover = computeHover("slide-up duration-800, fade-in", 2, context, {
+      previews: true,
+    })!;
+
+    assert.match(hover.markdown, /With this group's timing: `duration-800`/);
   });
 });
 

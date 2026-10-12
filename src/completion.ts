@@ -18,6 +18,8 @@ export interface CompletionData {
   category: CompletionCategory;
   detail: string;
   documentation: string;
+  /** The other valid tokens in the same comma group, for previews. */
+  groupTokens?: string[];
   /** Re-open suggestions after inserting, e.g. after `from:`. */
   retrigger?: boolean;
   deprecated?: boolean;
@@ -68,8 +70,14 @@ export function computeCompletions(
     current.startsWith(candidate),
   );
 
+  const groupTokens = others
+    .filter((token) => !token.issue)
+    .map((token) => token.text);
+  const withGroup = (items: CompletionData[]) =>
+    items.map((item) => ({ ...item, groupTokens }));
+
   if (prefix) {
-    result.items = utilityCompletions(prefix, context);
+    result.items = withGroup(utilityCompletions(prefix, context));
     return result;
   }
 
@@ -236,7 +244,7 @@ export function computeCompletions(
     }
   }
 
-  result.items = items;
+  result.items = withGroup(items);
   return result;
 }
 

@@ -1316,6 +1316,110 @@ export function tokenPreviewSvg(
   return sample ? previewSvg(sample, metadata) : undefined;
 }
 
+const SLOT_ALIASES: Record<string, string> = { "repeat-": "play-" };
+const SPRING_ONLY = ["damping-", "stiffness-", "mass-"];
+
+/**
+ * Reads a timing token, or a completion label such as `duration-{number}`,
+ * as a full token plus the slot it fills in a group (easing, `duration-`,
+ * `play-`, ...). Returns `undefined` for tokens that aren't about timing.
+ */
+function readTiming(
+  token: string,
+  metadata: TokenMetadata,
+): { full: string; slot: string } | undefined {
+  const label = token.replace(/\{number\}$/, "");
+
+  if (
+    label === metadata.spring.token ||
+    metadata.easings.some((easing) => easing.token === label)
+  ) {
+    return { full: label, slot: "easing" };
+  }
+
+  const timing = [...metadata.numericTiming, ...metadata.countTiming].find(
+    (candidate) => label.startsWith(candidate.prefix),
+  );
+
+  if (!timing) {
+    return undefined;
+  }
+
+  return {
+    full: label === timing.prefix ? timing.example : label,
+    slot: SLOT_ALIASES[timing.prefix] ?? timing.prefix,
+  };
+}
+
+/**
+ * Markdown previews for one token, taking the rest of its comma group into
+ * account so the preview shows what the group will actually do:
+ *
+ * - a shape token (`slide-up`, `from:...`, `layout-*`, ...) plays with the
+ *   group's timing tokens, so `duration-800 delay-200` visibly slows it;
+ * - a timing token gets its chart, then the group's shape played with that
+ *   timing (replacing any token in the same slot).
+ *
+ * `groupTokens` are the other valid tokens in the same comma group.
+ */
+export function tokenPreviewMarkdown(
+  token: string,
+  metadata: TokenMetadata,
+  groupTokens: readonly string[] = [],
+): string {
+  const timings = groupTokens
+    .map((text) => readTiming(text, metadata))
+    .filter((timing): timing is { full: string; slot: string } => !!timing);
+  const shapes = groupTokens.filter(
+    (text) => !readTiming(text, metadata) && sampleFor(text, metadata),
+  );
+  const own = readTiming(token, metadata);
+
+  if (own) {
+    let markdown = previewMarkdown(timingSvg(token, metadata));
+
+    if (shapes.length > 0) {
+      const applied = [
+        ...shapes,
+        ...timings.filter((timing) => timing.slot !== own.slot).map((timing) => timing.full),
+        own.full,
+      ].join(" ");
+      const card = previewSvg(applied, metadata);
+      const springless =
+        SPRING_ONLY.includes(own.slot) &&
+        !/\bspring\b/.test(applied) &&
+        !metadata.presets.some(
+          (preset) => shapes.includes(preset.name) && preset.motion.startsWith("spring"),
+        );
+
+      if (card) {
+        markdown += `\n\nIn this group: \`${applied}\`${
+          springless ? " (add `spring` for this to take effect)" : ""
+        }\n\n${previewMarkdown(card)}`;
+      }
+    }
+
+    return markdown;
+  }
+
+  const sample = sampleFor(token, metadata);
+
+  if (!sample) {
+    return "";
+  }
+
+  const extra = timings.map((timing) => timing.full);
+  const card = previewSvg([sample, ...extra].join(" "), metadata);
+
+  if (!card) {
+    return "";
+  }
+
+  return extra.length > 0
+    ? `With this group's timing: \`${extra.join(" ")}\`\n\n${previewMarkdown(card)}`
+    : previewMarkdown(card);
+}
+
 /** The preview for a whole animate value: a timeline, or an animated card. */
 export function valuePreviewSvg(
   value: string,
