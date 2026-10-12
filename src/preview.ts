@@ -904,24 +904,126 @@ function tracer(path: string, ms: number): string {
   return `<circle class="m" r="3.5" fill="${COLORS.card}"><animateMotion dur="${round(ms)}ms" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;0.7;1" calcMode="linear" path="${path}"/></circle>`;
 }
 
-function easingChart(token: string): string {
-  const points = (ease: (t: number) => number) =>
-    Array.from({ length: 61 }, (_, i) => [i / 60, ease(i / 60)] as [number, number]);
-  const line = curvePath(points(EASINGS[token]), 1, -0.05, 1.05);
+/**
+ * The timing a token works with inside its comma group: the delay before
+ * it, the motion length it shapes, and where those values come from. Charts
+ * use it so connected tokens show up together (a delay chart shows the
+ * group's real duration, a duration chart starts after the group's delay).
+ */
+export interface GroupTiming {
+  delay: number;
+  /** Resolved duration: token, preset default, or 300ms. */
+  duration: number;
+  /** Where `duration` comes from, e.g. `duration-1000` or `slide-up default`. */
+  durationSource: string;
+  /** The duration the group would have without a `duration-*` token. */
+  baseDuration: number;
+  baseSource: string;
+  easing: string;
+  spring: boolean;
+  springSettle: number;
+  play: number;
+  /** Explicit `duration-*` token in the group, if any. */
+  durationToken?: string;
+}
+
+const DEFAULT_GROUP: GroupTiming = {
+  delay: 0,
+  duration: DEFAULT_DURATION,
+  durationSource: "default",
+  baseDuration: DEFAULT_DURATION,
+  baseSource: "default",
+  easing: "ease-out",
+  spring: false,
+  springSettle: 0,
+  play: 1,
+};
+
+/** Resolves the timing of one comma group's tokens. */
+export function groupTiming(
+  tokens: readonly string[],
+  metadata: TokenMetadata,
+): GroupTiming {
+  const [group] = resolve(tokens.join(" "), metadata);
+
+  if (!group) {
+    return DEFAULT_GROUP;
+  }
+
+  const durationToken = tokens.find((token) => /^duration-\d/.test(token));
+  const preset = metadata.presets.find((item) => tokens.includes(item.name));
+  const presetDuration = preset ? parseMotion(preset.motion).duration : undefined;
+  const baseDuration = presetDuration ?? DEFAULT_DURATION;
+  const baseSource = presetDuration !== undefined ? `${preset!.name} default` : "default";
+  const spring = group.timing.driver === "spring";
+
+  return {
+    delay: group.timing.delay,
+    duration: group.timing.duration,
+    durationSource: durationToken ?? baseSource,
+    baseDuration,
+    baseSource,
+    easing: group.timing.easing,
+    spring,
+    springSettle: spring
+      ? springCurve(group.timing.damping, group.timing.stiffness, group.timing.mass).duration
+      : 0,
+    play: group.timing.play,
+    durationToken,
+  };
+}
+
+/** Length of one play: the spring's settle time, or the duration. */
+const playLength = (ctx: GroupTiming) => (ctx.spring ? ctx.springSettle : ctx.duration);
+
+/** Hatched "wait" band across the plot area, from 0 to `delay`. */
+function plotWait(delay: number, xMax: number): string {
+  if (!delay) {
+    return "";
+  }
+
+  const w = CHART_W - PLOT.l - PLOT.r;
+  const h = CHART_H - PLOT.t - PLOT.b;
+  const width = round((delay / xMax) * w);
+
+  return (
+    `<rect x="${PLOT.l}" y="${PLOT.t}" width="${width}" height="${h}" fill="url(#h)" opacity="0.35"/>` +
+    text(PLOT.l + 3, PLOT.t + h * 0.62, `wait ${delay}ms`, { cls: "w" })
+  );
+}
+
+function easingChart(token: string, ctx: GroupTiming = DEFAULT_GROUP): string {
+  const delay = ctx.delay;
+  const duration = ctx.duration;
+  const total = delay + duration;
+  const timed = delay > 0 || duration !== DEFAULT_DURATION;
+  const points = (ease: (t: number) => number) => {
+    const list = Array.from(
+      { length: 61 },
+      (_, i) => [delay + (i / 60) * duration, ease(i / 60)] as [number, number],
+    );
+    return delay ? ([[0, 0]] as [number, number][]).concat(list) : list;
+  };
+  const line = curvePath(points(EASINGS[token]), total, -0.05, 1.05);
   const isDefault = token === "ease-out";
   const legendY = CHART_H - PLOT.b - 6;
 
   return chart(
-    title(token, EASING_TEXT[token] ?? "") +
-      curveAxes(-0.05, 1.05, "time →") +
+    title(token, ctx.spring ? "ignored: group uses a spring" : EASING_TEXT[token] ?? "") +
+      plotWait(delay, total) +
+      curveAxes(-0.05, 1.05, timed ? `${total}ms` : "time →") +
+      (timed
+        ? text(PLOT.l + 14, CHART_H - 9, `${duration}ms from ${ctx.durationSource}`)
+        : "") +
       (isDefault
         ? text(CHART_W - PLOT.r - 2, legendY, "this is the default", { anchor: "end" })
-        : dashed(curvePath(points(EASINGS["ease-out"]), 1, -0.05, 1.05)) +
+        : dashed(curvePath(points(EASINGS["ease-out"]), total, -0.05, 1.05)) +
           text(CHART_W - PLOT.r - 2, legendY, "- - ease-out (default)", {
             anchor: "end",
           })) +
       solid(line) +
-      tracer(line, 1800),
+      tracer(line, Math.max(1800, total * 1.6)),
+    delay ? HATCH : "",
   );
 }
 
@@ -949,9 +1051,17 @@ function springChart(
   token: string,
   summary: string,
   spring: typeof DEFAULT_SPRING,
+  delay = 0,
 ): string {
-  const stats = springStats(spring);
-  const base = springStats(DEFAULT_SPRING);
+  const shift = (stats: ReturnType<typeof springStats>) => ({
+    ...stats,
+    settle: stats.settle + delay,
+    points: (delay ? ([[0, 0]] as [number, number][]) : []).concat(
+      stats.points.map(([t, v]) => [t + delay, v] as [number, number]),
+    ),
+  });
+  const stats = shift(springStats(spring));
+  const base = shift(springStats(DEFAULT_SPRING));
   const isDefault =
     spring.damping === DEFAULT_SPRING.damping &&
     spring.stiffness === DEFAULT_SPRING.stiffness &&
@@ -966,6 +1076,7 @@ function springChart(
 
   return chart(
     title(token, summary) +
+      plotWait(delay, xMax) +
       curveAxes(-0.05, yMax, `${Math.round(xMax)}ms`) +
       (isDefault
         ? ""
@@ -985,6 +1096,7 @@ function springChart(
         { anchor: "end" },
       ) +
       tracer(line, Math.max(1200, stats.settle * 2)),
+    delay ? HATCH : "",
   );
 }
 
@@ -1045,89 +1157,111 @@ function playhead(total: number, max: number, y1: number, y2: number): string {
 const niceMax = (ms: number, step: number, min: number) =>
   Math.max(min, Math.ceil(ms / step) * step);
 
-function durationChart(token: string, ms: number): string {
-  const max = niceMax(ms, 250, 1000);
-  const ratio = ms / DEFAULT_DURATION;
+function durationChart(
+  token: string,
+  ms: number,
+  ctx: GroupTiming = DEFAULT_GROUP,
+): string {
+  const delay = ctx.delay;
+  const base = ctx.baseDuration;
+  const max = niceMax(delay + Math.max(ms, base), 250, 1000);
+  const ratio = ms / base;
   const times = (value: number) => value.toFixed(1).replace(/\.0$/, "");
-  const summary =
-    ms === DEFAULT_DURATION
-      ? "same as default"
-      : ratio > 1
-        ? `${times(ratio)}× longer than default`
-        : `${times(1 / ratio)}× shorter than default`;
-  const end = xOnLine(ms, max);
-  const labelInside = end + 50 > CHART_W - LINE.r;
+  const summary = ctx.spring
+    ? "ignored: group uses a spring"
+    : ms === base
+      ? `same as ${base}ms`
+      : `${times(ratio > 1 ? ratio : 1 / ratio)}× ${ratio > 1 ? "longer" : "shorter"} than ${base}ms`;
+  const start = xOnLine(delay, max);
+  const end = xOnLine(delay + ms, max);
+  const label = delay ? `${ms}ms · ends ${delay + ms}ms` : `${ms}ms`;
+  const labelInside = end + label.length * 6.2 + 4 > CHART_W - LINE.r;
 
   return chart(
     title(token, summary) +
-      text(LINE.l, 44, `default ${DEFAULT_DURATION}ms`) +
-      bar(LINE.l, xOnLine(DEFAULT_DURATION, max), 50, 12, {
+      text(LINE.l, 44, `${ctx.baseSource} ${base}ms`) +
+      (delay ? waitBar(LINE.l, start, 50, 12) : "") +
+      bar(start + (delay ? 2 : 0), xOnLine(delay + base, max), 50, 12, {
         fill: COLORS.mute,
         opacity: 0.35,
         dashed: true,
       }) +
-      text(LINE.l, 82, "this token", { cls: "k" }) +
-      bar(LINE.l, end, 88, 16) +
-      text(labelInside ? end - 4 : end + 4, 100, `${ms}ms`, {
+      text(LINE.l, 82, delay ? `this token, after delay ${delay}ms` : "this token", {
+        cls: "k",
+      }) +
+      (delay ? waitBar(LINE.l, start, 88, 16) : "") +
+      bar(start + (delay ? 2 : 0), end, 88, 16) +
+      text(labelInside ? end - 4 : end + 4, 100, label, {
         cls: labelInside ? undefined : "k",
         anchor: labelInside ? "end" : "start",
         fill: labelInside ? "#fff" : undefined,
       }) +
       ruler(max, 122) +
-      playhead(ms, max, 84, 108),
+      playhead(delay + ms, max, 84, 108),
+    delay ? HATCH : "",
   );
 }
 
-function delayChart(token: string, ms: number): string {
-  const motion = DEFAULT_DURATION;
+function delayChart(token: string, ms: number, ctx: GroupTiming = DEFAULT_GROUP): string {
+  const motion = playLength(ctx);
+  const source = ctx.spring ? "spring settles" : ctx.durationSource;
   const max = niceMax(ms + motion, 200, 600);
   const start = xOnLine(ms, max);
   const end = xOnLine(ms + motion, max);
 
   return chart(
     title(token, "waits, then moves") +
-      waitBar(LINE.l, start, 58, 22) +
-      text((LINE.l + start) / 2, 50, `wait ${ms}ms`, { cls: "w", anchor: "middle" }) +
-      bar(start + 2, end, 58, 22) +
-      text((start + end) / 2, 50, `motion ${motion}ms`, { cls: "k", anchor: "middle" }) +
-      text(LINE.l, 100, `starts at ${ms}ms · ends at ${ms + motion}ms`) +
-      ruler(max, 122) +
-      playhead(ms + motion, max, 54, 84),
+      waitBar(LINE.l, start, 54, 22) +
+      text(LINE.l, 46, `wait ${ms}ms`, { cls: "w" }) +
+      bar(start + 2, end, 54, 22) +
+      text(end, 46, `motion ${motion}ms`, { cls: "k", anchor: "end" }) +
+      text(Math.min(Math.max((start + end) / 2, 70), CHART_W - 70), 90, `from ${source}`, {
+        anchor: "middle",
+      }) +
+      text(LINE.l, 108, `starts at ${ms}ms · ends at ${ms + motion}ms`) +
+      ruler(max, 124) +
+      playhead(ms + motion, max, 50, 80),
     HATCH,
   );
 }
 
-function playChart(token: string, plays: number): string {
+function playChart(token: string, plays: number, ctx: GroupTiming = DEFAULT_GROUP): string {
   const infinite = plays === Infinity;
   const count = infinite ? 4 : Math.min(plays, 8);
-  const each = DEFAULT_DURATION;
+  const each = playLength(ctx);
+  const delay = ctx.delay;
   const overflow = infinite || plays > count;
   // Leave room after the bars for the "∞ …" or "…" marker.
-  const max = niceMax(count * each * (overflow ? 1.15 : 1), 250, 1000);
-  let bars = "";
+  const max = niceMax((delay + count * each) * (overflow ? 1.15 : 1), 250, 1000);
+  let bars = delay ? waitBar(LINE.l, xOnLine(delay, max), 60, 22) : "";
 
   for (let i = 0; i < count; i += 1) {
-    const from = xOnLine(i * each, max) + 1;
-    const to = xOnLine((i + 1) * each, max) - 1;
+    const from = xOnLine(delay + i * each, max) + 1;
+    const to = xOnLine(delay + (i + 1) * each, max) - 1;
     bars +=
       bar(from, to, 60, 22, { opacity: infinite ? 0.95 - i * 0.22 : 0.95 }) +
       text((from + to) / 2, 75, i + 1, { anchor: "middle", fill: "#fff" });
   }
+
+  const after = xOnLine(delay + count * each, max) + 6;
 
   return chart(
     title(
       token,
       infinite
         ? "repeats until removed"
-        : `${plays} plays × ${each}ms = ${plays * each}ms`,
+        : `${plays} × ${each}ms${delay ? ` + ${delay}ms delay` : ""} = ${delay + plays * each}ms`,
     ) +
       bars +
-      (infinite ? text(xOnLine(count * each, max) + 6, 76, "∞ …", { cls: "k" }) : "") +
-      (plays > count && !infinite
-        ? text(xOnLine(count * each, max) + 6, 76, "…", { cls: "k" })
-        : "") +
-      text(LINE.l, 104, "Reduce Motion: plays once") +
+      (infinite ? text(after, 76, "∞ …", { cls: "k" }) : "") +
+      (plays > count && !infinite ? text(after, 76, "…", { cls: "k" }) : "") +
+      text(
+        LINE.l,
+        104,
+        `each play: ${each}ms from ${ctx.spring ? "spring settle" : ctx.durationSource}`,
+      ) +
       ruler(max, 122),
+    delay ? HATCH : "",
   );
 }
 
@@ -1138,11 +1272,12 @@ function playChart(token: string, plays: number): string {
 export function timingSvg(
   token: string,
   metadata: TokenMetadata,
+  ctx: GroupTiming = DEFAULT_GROUP,
 ): string | undefined {
   const label = token.replace(/\{number\}$/, "");
 
   if (EASINGS[label] && metadata.easings.some((easing) => easing.token === label)) {
-    return easingChart(label);
+    return easingChart(label, ctx);
   }
 
   if (label === metadata.spring.token) {
@@ -1150,6 +1285,7 @@ export function timingSvg(
       label,
       `damping ${DEFAULT_SPRING.damping} · stiffness ${DEFAULT_SPRING.stiffness}`,
       DEFAULT_SPRING,
+      ctx.delay,
     );
   }
 
@@ -1167,7 +1303,7 @@ export function timingSvg(
   if (timing.prefix === "play-" || timing.prefix === "repeat-") {
     const plays = raw === "infinite" ? Infinity : Number(raw);
     return plays === Infinity || (Number.isInteger(plays) && plays > 0)
-      ? playChart(full, plays)
+      ? playChart(full, plays, ctx)
       : undefined;
   }
 
@@ -1179,9 +1315,9 @@ export function timingSvg(
 
   switch (timing.prefix) {
     case "duration-":
-      return value > 0 ? durationChart(full, value) : undefined;
+      return value > 0 ? durationChart(full, value, ctx) : undefined;
     case "delay-":
-      return delayChart(full, value);
+      return delayChart(full, value, ctx);
     case "damping-":
       return value > 0
         ? springChart(
@@ -1192,6 +1328,7 @@ export function timingSvg(
                 ? "calmer"
                 : "default",
             { ...DEFAULT_SPRING, damping: value },
+            ctx.delay,
           )
         : undefined;
     case "stiffness-":
@@ -1204,6 +1341,7 @@ export function timingSvg(
                 ? "softer"
                 : "default",
             { ...DEFAULT_SPRING, stiffness: value },
+            ctx.delay,
           )
         : undefined;
     case "mass-":
@@ -1216,6 +1354,7 @@ export function timingSvg(
                 ? "lighter, faster"
                 : "default",
             { ...DEFAULT_SPRING, mass: value },
+            ctx.delay,
           )
         : undefined;
     default:
@@ -1376,7 +1515,24 @@ export function tokenPreviewMarkdown(
   const own = readTiming(token, metadata);
 
   if (own) {
-    let markdown = previewMarkdown(timingSvg(token, metadata));
+    const context = [
+      ...shapes,
+      ...timings.filter((timing) => timing.slot !== own.slot).map((timing) => timing.full),
+      own.full,
+    ];
+    const ctx = groupTiming(context, metadata);
+    let markdown = previewMarkdown(timingSvg(token, metadata, ctx));
+    const notes: string[] = [];
+
+    if (ctx.spring && (own.slot === "duration-" || (own.slot === "easing" && own.full !== metadata.spring.token))) {
+      notes.push(`Springs ignore \`duration-*\` and easing tokens; this group uses a spring.`);
+    } else if (ctx.spring && ctx.durationToken && SPRING_ONLY.concat("easing").includes(own.slot)) {
+      notes.push(`\`${ctx.durationToken}\` has no effect once the group uses a spring.`);
+    }
+
+    if (notes.length > 0) {
+      markdown += `\n\n${notes.join(" ")}`;
+    }
 
     if (shapes.length > 0) {
       const applied = [

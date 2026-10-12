@@ -7,6 +7,7 @@ import {
   previewMarkdown,
   previewSvg,
   sampleFor,
+  groupTiming,
   timelineSvg,
   timingSvg,
   tokenPreviewMarkdown,
@@ -119,9 +120,9 @@ describe("timingSvg", () => {
   });
 
   it("compares durations with the default", () => {
-    assert.match(timingSvg("duration-500", metadata)!, /1\.7× longer than default/);
-    assert.match(timingSvg("duration-150", metadata)!, /2× shorter than default/);
-    assert.match(timingSvg("duration-{number}", metadata)!, /same as default/);
+    assert.match(timingSvg("duration-500", metadata)!, /1\.7× longer than 300ms/);
+    assert.match(timingSvg("duration-150", metadata)!, /2× shorter than 300ms/);
+    assert.match(timingSvg("duration-{number}", metadata)!, /same as 300ms/);
     assert.equal(timingSvg("duration-0", metadata), undefined);
   });
 
@@ -143,9 +144,9 @@ describe("timingSvg", () => {
   });
 
   it("repeats bars for play counts", () => {
-    assert.match(timingSvg("play-3", metadata)!, /3 plays × 300ms = 900ms/);
+    assert.match(timingSvg("play-3", metadata)!, /3 × 300ms = 900ms/);
     assert.match(timingSvg("play-infinite", metadata)!, /repeats until removed/);
-    assert.match(timingSvg("repeat-2", metadata)!, /2 plays/);
+    assert.match(timingSvg("repeat-2", metadata)!, /2 × 300ms = 600ms/);
   });
 
   it("ignores shape tokens", () => {
@@ -209,7 +210,7 @@ describe("group-aware previews", () => {
     const [chart, card] = svgs(markdown);
 
     assert.equal(images(markdown), 2);
-    assert.match(chart, /1\.7× longer than default/);
+    assert.match(chart, /1\.6× longer than slide-up default|1\.6× longer than 320ms/);
     assert.match(markdown, /In this group: `slide-up ease-in-out duration-500`/);
     assert.match(card, /500ms ease-in-out/);
   });
@@ -242,6 +243,76 @@ describe("group-aware previews", () => {
     })!;
 
     assert.match(hover.markdown, /With this group's timing: `duration-800`/);
+  });
+});
+
+describe("connected timing", () => {
+  const svgs = (markdown: string) =>
+    [...markdown.matchAll(/base64,([A-Za-z0-9+/=]+)\)/g)].map((match) =>
+      Buffer.from(match[1], "base64").toString("utf8"),
+    );
+
+  it("resolves a group's timing and where it comes from", () => {
+    const ctx = groupTiming(["slide-up", "duration-1000", "delay-200"], metadata);
+
+    assert.equal(ctx.delay, 200);
+    assert.equal(ctx.duration, 1000);
+    assert.equal(ctx.durationSource, "duration-1000");
+    assert.equal(ctx.baseDuration, 320);
+    assert.equal(ctx.baseSource, "slide-up default");
+  });
+
+  it("draws a delay with the group's duration", () => {
+    const [chart] = svgs(
+      tokenPreviewMarkdown("delay-200", metadata, ["slide-up", "duration-1000"]),
+    );
+
+    assert.match(chart, /motion 1000ms/);
+    assert.match(chart, /from duration-1000/);
+    assert.match(chart, /starts at 200ms · ends at 1200ms/);
+  });
+
+  it("draws a duration after the group's delay, against the preset default", () => {
+    const [chart] = svgs(
+      tokenPreviewMarkdown("duration-1000", metadata, ["slide-up", "delay-200"]),
+    );
+
+    assert.match(chart, /3\.1× longer than 320ms/);
+    assert.match(chart, /slide-up default 320ms/);
+    assert.match(chart, /after delay 200ms/);
+    assert.match(chart, /1000ms · ends 1200ms/);
+  });
+
+  it("stretches easing curves over the group's delay and duration", () => {
+    const [chart] = svgs(
+      tokenPreviewMarkdown("ease-in-out", metadata, ["slide-up", "duration-1000", "delay-200"]),
+    );
+
+    assert.match(chart, /wait 200ms/);
+    assert.match(chart, /1000ms from duration-1000/);
+    assert.match(chart, />1200ms</);
+  });
+
+  it("repeats the group's duration after its delay", () => {
+    const [chart] = svgs(
+      tokenPreviewMarkdown("play-3", metadata, ["slide-up", "duration-1000", "delay-200"]),
+    );
+
+    assert.match(chart, /3 × 1000ms \+ 200ms delay = 3200ms/);
+    assert.match(chart, /each play: 1000ms from duration-1000/);
+  });
+
+  it("explains timing that springs ignore", () => {
+    const duration = tokenPreviewMarkdown("duration-500", metadata, ["bounce"]);
+    const damping = tokenPreviewMarkdown("damping-4", metadata, ["scale-in", "spring", "duration-800"]);
+
+    assert.match(duration, /Springs ignore `duration-\*`/);
+    assert.match(svgs(duration)[0], /ignored: group uses a spring/);
+    assert.match(damping, /`duration-800` has no effect once the group uses a spring/);
+    assert.match(
+      svgs(tokenPreviewMarkdown("delay-100", metadata, ["bounce"]))[0],
+      /from spring settles/,
+    );
   });
 });
 
