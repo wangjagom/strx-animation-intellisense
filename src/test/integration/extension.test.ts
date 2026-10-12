@@ -74,7 +74,8 @@ suite("STRX Animation IntelliSense", () => {
           document.uri,
           document.positionAt(source.indexOf('"') + 1),
           undefined,
-          100,
+          // Presets come first; resolving the first few covers slide-up.
+          10,
         );
       return list.items.find(
         (candidate) =>
