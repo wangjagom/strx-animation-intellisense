@@ -1,5 +1,10 @@
 # Change Log
 
+## 0.3.0
+
+- Animated previews in completion details and hovers. Each preview plays the token's motion with the duration, easing, or spring from the installed library's `tokens.json`. Hovering a token in a longer string also previews the whole `animate` value.
+- Setting `strxAnimation.preview.enable`. Previews are also hidden when `workbench.reduceMotion` is `on`.
+
 ## 0.2.1
 
 - Link the react-native-strx documentation site, npm package, and GitHub repository from the README and extension manifest.

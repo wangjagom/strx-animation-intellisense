@@ -60,6 +60,47 @@ suite("STRX Animation IntelliSense", () => {
     assert.ok(!labels.includes("slide-up"), "one preset per group");
   });
 
+  test("adds animated previews to completion details and hovers", async () => {
+    const source = `<Strx.View animate="fade-in from:translate-y-12 spring" />`;
+    const document = await openTsx(source);
+    const preview = /!\[Animation preview\]\(data:image\/svg\+xml;base64,/;
+    const markdown = (value: vscode.CompletionItem["documentation"]) =>
+      typeof value === "string" ? value : (value?.value ?? "");
+
+    const item = await waitFor(async () => {
+      const list =
+        await vscode.commands.executeCommand<vscode.CompletionList>(
+          "vscode.executeCompletionItemProvider",
+          document.uri,
+          document.positionAt(source.indexOf('"') + 1),
+          undefined,
+          100,
+        );
+      return list.items.find(
+        (candidate) =>
+          candidate.label === "slide-up" &&
+          preview.test(markdown(candidate.documentation)),
+      );
+    });
+
+    assert.ok(item);
+
+    const hovers = await waitFor(async () => {
+      const found = await vscode.commands.executeCommand<vscode.Hover[]>(
+        "vscode.executeHoverProvider",
+        document.uri,
+        document.positionAt(source.indexOf("fade-in") + 2),
+      );
+      return found.length > 0 ? found : undefined;
+    });
+    const contents = hovers
+      .flatMap((hover) => hover.contents)
+      .map((content) => (typeof content === "string" ? content : content.value))
+      .join("\n");
+
+    assert.equal(contents.match(/!\[Animation preview\]/g)?.length, 2);
+  });
+
   test("reports unknown tokens with a quick fix", async () => {
     const document = await openTsx(
       `const t = { playables: [{ target: "a", animate: "fade-inn" }] };`,

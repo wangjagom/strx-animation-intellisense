@@ -2,7 +2,7 @@
   "name": "strx-animation-intellisense",
   "displayName": "Strx Animation Intellisense",
   "description": "Autocomplete, hover docs, and diagnostics for react-native-strx animate tokens",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "strx",
   "engines": {
     "vscode": "^1.120.0"
@@ -35,6 +35,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show warnings for unknown or invalid tokens in animate strings."
+        },
+        "strxAnimation.preview.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show an animated preview of tokens in completion details and hovers. Previews are also hidden when `workbench.reduceMotion` is `on`."
         }
       }
     },

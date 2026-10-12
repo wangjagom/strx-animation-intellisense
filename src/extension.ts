@@ -17,6 +17,7 @@ import {
 } from "./grammar";
 import { computeHover } from "./hover";
 import { loadMetadata, type LoadedMetadata } from "./metadata";
+import { previewMarkdown, previewSvg, sampleFor } from "./preview";
 
 const LANGUAGES: SourceLanguage[] = [
   "typescriptreact",
@@ -216,6 +217,12 @@ class StrxLanguageService {
   }
 }
 
+/** Completion data kept until VS Code asks to resolve an item's details. */
+const pendingPreviews = new WeakMap<
+  vscode.CompletionItem,
+  { data: CompletionData; context: GrammarContext }
+>();
+
 function toCompletionItem(
   data: CompletionData,
   index: number,
@@ -289,6 +296,40 @@ function quickFixes(
   }
 
   return actions;
+}
+
+function previewsEnabled(): boolean {
+  return (
+    vscode.workspace
+      .getConfiguration("strxAnimation")
+      .get<boolean>("preview.enable", true) &&
+    vscode.workspace.getConfiguration("workbench").get("reduceMotion") !== "on"
+  );
+}
+
+/** Adds an animated preview to a completion item's documentation. */
+function resolvePreview(item: vscode.CompletionItem): vscode.CompletionItem {
+  const pending = pendingPreviews.get(item);
+
+  if (!pending || !previewsEnabled()) {
+    return item;
+  }
+
+  pendingPreviews.delete(item);
+
+  const { data, context } = pending;
+  const sample = sampleFor(data.label, context.metadata);
+  const image = sample
+    ? previewMarkdown(previewSvg(sample, context.metadata))
+    : "";
+
+  if (image) {
+    item.documentation = new vscode.MarkdownString(
+      `${data.documentation}\n\n${image}`,
+    );
+  }
+
+  return item;
 }
 
 function diagnosticsEnabled(): boolean {
@@ -417,13 +458,18 @@ export function activate(extensionContext: vscode.ExtensionContext): void {
             document.positionAt(located.start + result.replaceEnd),
           );
 
+          const context = service.context(document);
+
           return new vscode.CompletionList(
-            result.items.map((item, index) =>
-              toCompletionItem(item, index, range),
-            ),
+            result.items.map((data, index) => {
+              const item = toCompletionItem(data, index, range);
+              pendingPreviews.set(item, { data, context });
+              return item;
+            }),
             false,
           );
         },
+        resolveCompletionItem: resolvePreview,
       },
       '"',
       "'",
@@ -445,6 +491,7 @@ export function activate(extensionContext: vscode.ExtensionContext): void {
           located.value,
           located.offset,
           service.context(document),
+          { previews: previewsEnabled() },
         );
 
         return hover
