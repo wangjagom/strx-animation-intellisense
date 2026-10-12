@@ -52,12 +52,13 @@ npm run package                         # build a .vsix
 
 ## Releasing
 
-Pushing a version tag runs `.github/workflows/release.yml`: it checks the tag matches `package.json`, runs the tests, publishes to the Visual Studio Marketplace (and to Open VSX when an `OVSX_PAT` secret exists), and creates a GitHub release with the `.vsix` attached.
+Pushing a version tag, or running the **Release** workflow from the Actions tab, runs `.github/workflows/release.yml`. It checks the tag matches `package.json` (a manual run creates the `v<version>` tag on the current commit), runs the tests, publishes to the Visual Studio Marketplace (and to Open VSX when an `OVSX_PAT` secret exists), and creates a GitHub release with the `.vsix` attached.
 
 ```sh
 # after bumping "version" in package.json and CHANGELOG.md on main
 git tag v0.3.0
 git push origin v0.3.0
+# or: Actions → Release → Run workflow (on main)
 ```
 
 Repository secrets: `VSCE_PAT` (Azure DevOps token with the Marketplace **Manage** scope for the `strx` publisher) and, optionally, `OVSX_PAT` (an [open-vsx.org](https://open-vsx.org) access token).
